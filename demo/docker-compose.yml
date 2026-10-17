@@ -1,0 +1,12 @@
+services:
+  m01-kernel:
+    build: .
+    ports:
+      - "3101:3101"
+    environment:
+      PORT: "3101"
+      HOST: "0.0.0.0"
+      M01_ADMIN_TOKEN: "${M01_ADMIN_TOKEN:?set M01_ADMIN_TOKEN in .env}"
+      M07_WEBHOOK_SECRET: "${M07_WEBHOOK_SECRET:?set M07_WEBHOOK_SECRET in .env}"
+      M13_WEBHOOK_SECRET: "${M13_WEBHOOK_SECRET:?set M13_WEBHOOK_SECRET in .env}"
+    restart: unless-stopped

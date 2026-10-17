@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AEOS M01 Kernel Console</title>
+<style>
+:root {
+  --bg-0: #0b0e13; --bg-1: #11151c; --bg-2: #171d27; --bg-hover: #1c2432;
+  --bg-side: #0e1218;
+  --line: #232b38; --line-strong: #313c4e;
+  --text-1: #e6ecf5; --text-2: #9aa8bd; --text-3: #5d6b80;
+  --brand: #4f7cf0; --brand-strong: #3f6ae0;
+  --brand-ring: rgba(79,124,240,.16);
+  --brand-veil: rgba(79,124,240,.16);
+  --brand-veil-strong: rgba(79,124,240,.35);
+  --brand-ink: #cfe0ff;
+  --bg-topbar: var(--bg-topbar);
+  --side-line: rgba(255,255,255,.06);
+  --side-line-soft: rgba(255,255,255,.08);
+  --side-muted: rgba(255,255,255,.45);
+  --side-label: rgba(255,255,255,.5);
+  --side-text: rgba(255,255,255,.65);
+  --side-hover: rgba(255,255,255,.06);
+  --side-input: rgba(255,255,255,.04);
+  --side-scroll: rgba(255,255,255,.1);
+  --side-k: rgba(255,255,255,.4);
+  --side-v: rgba(255,255,255,.75);
+  --spin-track: rgba(128,140,160,.35);
+  --allow: #34c98e; --deny: #f0564f; --warn: #e8a33d; --info: #4fb3d9;
+  --radius: 10px; --radius-s: 7px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+  --bounce: cubic-bezier(.34,1.56,.64,1);
+  color-scheme: dark;
+}
+:root[data-theme="violet"] {
+  --brand: #8b6ff2; --brand-strong: #7a5ce8;
+  --brand-ring: rgba(139,111,242,.18); --brand-veil: rgba(139,111,242,.16); --brand-veil-strong: rgba(139,111,242,.38);
+  --brand-ink: #ded2ff; --bg-topbar: rgba(13,11,20,.88);
+  --bg-0: #0d0b14; --bg-1: #12101c; --bg-2: #181522; --bg-hover: #1e1a2e; --bg-side: #100d18;
+  --line: #252033; --line-strong: #342c4a;
+}
+:root[data-theme="magenta"] {
+  --brand: #d65aa8; --brand-strong: #c74b99;
+  --brand-ring: rgba(214,90,168,.18); --brand-veil: rgba(214,90,168,.14); --brand-veil-strong: rgba(214,90,168,.38);
+  --brand-ink: #ffd3ee; --bg-topbar: rgba(19,11,16,.88);
+  --bg-0: #130b10; --bg-1: #1a1118; --bg-2: #211620; --bg-hover: #2a1b29; --bg-side: #160e14;
+  --line: #332031; --line-strong: #452c42;
+}
+:root[data-theme="cyan"] {
+  --brand: #38b6c9; --brand-strong: #2ba4b7;
+  --brand-ring: rgba(56,182,201,.18); --brand-veil: rgba(56,182,201,.14); --brand-veil-strong: rgba(56,182,201,.38);
+  --brand-ink: #cdf1f7; --bg-topbar: rgba(10,16,19,.88);
+  --bg-0: #0a1013; --bg-1: #101719; --bg-2: #151f22; --bg-hover: #1a282d; --bg-side: #0d1417;
+  --line: #203034; --line-strong: #2b4147;
+}
+:root[data-theme="dawn"] {
+  color-scheme: light;
+  --brand: #3465e0; --brand-strong: #2c58cc;
+  --brand-ring: rgba(52,101,224,.16); --brand-veil: rgba(52,101,224,.12); --brand-veil-strong: rgba(52,101,224,.32);
+  --brand-ink: #24418f; --bg-topbar: rgba(255,255,255,.85);
+  --bg-0: #f2f4f8; --bg-1: #ffffff; --bg-2: #eef1f6; --bg-hover: #e4e9f2; --bg-side: #e8ecf3;
+  --line: #d5dbe6; --line-strong: #b9c3d4;
+  --text-1: #1a2230; --text-2: #4d5a70; --text-3: #8b97ab;
+  --side-line: rgba(20,32,54,.1); --side-line-soft: rgba(20,32,54,.12);
+  --side-muted: rgba(26,34,48,.5); --side-label: rgba(26,34,48,.55); --side-text: rgba(26,34,48,.7);
+  --side-hover: rgba(26,34,48,.06); --side-input: rgba(26,34,48,.04); --side-scroll: rgba(26,34,48,.18);
+  --side-k: rgba(26,34,48,.45); --side-v: rgba(26,34,48,.8);
+  --spin-track: rgba(77,90,112,.3);
+  --allow: #0f8a5f; --deny: #d23b35; --warn: #b26a0d; --info: #1479a5;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg-0); color: var(--text-1);
+  font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  min-height: 100vh;
+}
+code, .mono { font-family: "Cascadia Code", Consolas, monospace; }
+
+#topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--bg-topbar); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+#topbar .brand { font-size: 15px; font-weight: 700; letter-spacing: .02em; }
+#topbar .brand b { color: var(--brand); }
+#topbar .spacer { flex: 1; }
+.health { display: flex; align-items: center; gap: var(--sp-2); color: var(--text-2); font-size: 12px; }
+.health .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+.health.online .dot { background: var(--allow); animation: breath 2s ease-in-out infinite; }
+.health.offline .dot { background: var(--deny); }
+@keyframes breath { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+.badge {
+  font: 600 11px "Cascadia Code", Consolas, monospace; letter-spacing: .08em;
+  padding: 2px 8px; border-radius: 4px; border: 1px solid var(--warn); color: var(--warn);
+}
+.themes { display: flex; gap: 6px; align-items: center; margin-left: var(--sp-2); }
+.th {
+  width: 14px; height: 14px; border-radius: 50%; padding: 0;
+  background: var(--c); border: 2px solid transparent; cursor: pointer;
+  transition: transform .12s var(--bounce), border-color .2s;
+}
+.th:hover { transform: scale(1.2); }
+.th:focus-visible, .th.custom:focus-within { outline: 2px solid var(--brand); outline-offset: 2px; }
+.th.active { border-color: var(--text-1); }
+.th.custom {
+  position: relative; overflow: hidden;
+  background: conic-gradient(#f0564f, #e8a33d, #34c98e, #38b6c9, #4f7cf0, #8b6ff2, #d65aa8, #f0564f);
+}
+.th.custom::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  background: var(--custom-c, #0b0e13); border: 1px solid rgba(255,255,255,.6);
+}
+.th.custom input[type="color"] {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; border: 0; padding: 0; cursor: pointer;
+}
+
+#layout {
+  display: grid; grid-template-columns: 264px 1fr; gap: 20px;
+  max-width: 1440px; margin: 0 auto; padding: var(--sp-5);
+}
+aside {
+  position: sticky; top: 69px;
+  height: calc(100vh - 69px - var(--sp-5));
+  display: flex; flex-direction: column;
+  background: var(--bg-side);
+  border: 1px solid var(--side-line); border-radius: var(--radius);
+  padding: var(--sp-4) var(--sp-3);
+}
+.nav-scroll { flex: 1; overflow-y: auto; padding-right: var(--sp-1); }
+.nav-scroll::-webkit-scrollbar { width: 4px; }
+.nav-scroll::-webkit-scrollbar-thumb { background: var(--side-scroll); border-radius: 2px; }
+.group { margin-bottom: 30px; }
+.group h3 {
+  font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--side-muted); margin-bottom: var(--sp-2); padding: 0 var(--sp-2);
+}
+.field { margin-bottom: var(--sp-2); padding: 0 var(--sp-2); }
+.field label { display: block; font-size: 11.5px; color: var(--side-label); margin-bottom: 2px; }
+.field input {
+  width: 100%; padding: 6px 9px; font-size: 12px; color: var(--text-1);
+  background: var(--side-input); border: 1px solid var(--side-line-soft); border-radius: 6px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  transition: border-color .2s, box-shadow .2s;
+}
+.field input:focus {
+  outline: none; border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+
+.btn {
+  position: relative; display: flex; justify-content: flex-start; align-items: center;
+  width: 100%; min-height: 32px; padding: 5px var(--sp-2); margin-bottom: 2px;
+  background: transparent; color: var(--side-text);
+  border: none; border-radius: 6px;
+  font-size: 12.5px; font-weight: 400; cursor: pointer; text-align: left;
+  transition: transform .12s var(--bounce), background-color .2s, color .2s;
+}
+.btn:hover { background: var(--side-hover); color: var(--text-1); }
+.btn:active { transform: scale(.96); }
+.btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.btn:disabled { opacity: .65; cursor: not-allowed; }
+.btn .hint { margin-left: auto; font-size: 10px; color: var(--text-3); font-family: "Cascadia Code", Consolas, monospace; }
+.btn .btn-spinner {
+  width: 14px; height: 14px; border-radius: 50%; display: none;
+  border: 2px solid var(--spin-track); border-top-color: var(--text-1);
+  animation: spin .7s linear infinite;
+}
+.btn.loading { justify-content: center; color: transparent; pointer-events: none; }
+.btn.loading .hint { display: none; }
+.btn.loading .btn-spinner { display: block; }
+.btn.success { background: rgba(52,201,142,.14); color: var(--allow); pointer-events: none; }
+.btn.success::before {
+  content: "✓"; font-weight: 700; margin-right: 6px;
+  animation: pop .35s cubic-bezier(.3,.7,.4,1.4);
+}
+.btn.danger { color: rgba(232,163,61,.85); }
+.btn.danger:hover { background: rgba(232,163,61,.1); color: var(--warn); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pop { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+.side-anchor {
+  flex-shrink: 0; margin-top: var(--sp-3);
+  border-top: 1px solid var(--side-line-soft);
+  padding: var(--sp-3) var(--sp-2) var(--sp-1);
+  font-size: 12px; color: var(--text-2);
+}
+.side-anchor .row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.side-anchor .k { color: var(--side-k); font-size: 11px; width: 52px; }
+.side-anchor .v { color: var(--side-v); font-family: "Cascadia Code", Consolas, monospace; font-size: 11.5px; }
+.st { display: inline-flex; align-items: center; gap: 6px; }
+.st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+.st.active::before { background: var(--allow); animation: breath 2s ease-in-out infinite; }
+.st.revoked::before, .st.offboarded::before { background: var(--deny); }
+.st.unregistered::before { background: var(--warn); }
+
+.composer .cline { display: flex; align-items: center; gap: 10px; margin-bottom: var(--sp-3); font-size: 12px; }
+.composer .k { color: var(--text-3); }
+.composer .dcmds { margin-left: auto; color: var(--text-3); font-size: 11px; font-family: "Cascadia Code", Consolas, monospace; }
+.composer .lbl { display: block; font-size: 11.5px; color: var(--text-2); margin-bottom: var(--sp-1); }
+.composer select {
+  width: 100%; padding: 7px 10px; font-size: 12.5px; color: var(--text-1);
+  background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: var(--radius-s);
+  cursor: pointer; transition: border-color .2s, box-shadow .2s;
+}
+.composer select:focus-visible, .composer select:focus {
+  outline: none; border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+.composer .pfield { margin-top: var(--sp-2); }
+.composer .pfield label { display: block; font-size: 11.5px; color: var(--text-2); margin-bottom: 2px; }
+.composer .pfield input {
+  width: 100%; padding: 6px 9px; font-size: 12px; color: var(--text-1);
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  transition: border-color .2s, box-shadow .2s;
+}
+.composer .pfield input:focus-visible, .composer .pfield input:focus {
+  outline: none; border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+.composer .pfield input.invalid { border-color: var(--deny); }
+.risk-banner {
+  margin-top: var(--sp-2); padding: 8px 10px; border-radius: 6px;
+  background: rgba(232,163,61,.08); border: 1px solid rgba(232,163,61,.35);
+  color: var(--warn); font-size: 12px; line-height: 1.5;
+}
+.ack {
+  display: flex; align-items: center; gap: 8px; margin-top: var(--sp-2);
+  font-size: 12px; color: var(--warn); cursor: pointer; user-select: none;
+}
+.ack input { accent-color: var(--warn); width: 14px; height: 14px; cursor: pointer; }
+.btn.send { justify-content: center; background: var(--brand); color: #fff; font-weight: 600; margin-top: var(--sp-3); }
+.btn.send:hover { background: var(--brand-strong); }
+.btn.send:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.btn.send:disabled { opacity: .45; }
+.hist-wrap { margin-top: var(--sp-4); border-top: 1px solid var(--line); padding-top: var(--sp-3); }
+.hist-head { font-size: 12px; color: var(--text-2); margin-bottom: var(--sp-2); }
+.hist-head .hist-tip { float: right; color: var(--text-3); font-size: 11px; }
+.hist { list-style: none; max-height: 168px; overflow-y: auto; }
+.hist li {
+  display: flex; align-items: center; gap: 10px; padding: 5px 8px; margin-bottom: 2px;
+  border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--text-2);
+  animation: fadeUp .24s ease;
+}
+.hist li:hover { background: var(--bg-hover); color: var(--text-1); }
+.hist li.empty { cursor: default; color: var(--text-3); }
+.hist li.empty:hover { background: transparent; }
+.hist .t { color: var(--text-3); font-size: 11px; }
+.hist .chip {
+  font: 600 10px "Cascadia Code", Consolas, monospace; padding: 1px 7px; border-radius: 4px;
+  border: 1px solid var(--line-strong);
+}
+.hist .chip.EXECUTED { color: var(--allow); border-color: rgba(52,201,142,.4); }
+.hist .chip.DENY { color: var(--deny); border-color: rgba(240,86,79,.4); }
+.hist .chip.REQUIRE_APPROVAL { color: var(--warn); border-color: rgba(232,163,61,.4); }
+.hist .hcmd { font-family: "Cascadia Code", Consolas, monospace; color: var(--text-1); }
+.hist .hwhy { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+.chatwrap { display: flex; flex-direction: column; min-height: 320px; }
+.chat-head { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); margin-bottom: var(--sp-2); }
+.chat-head .ctitle { color: var(--text-3); }
+.chat {
+  flex: 1; max-height: 300px; overflow-y: auto;
+  background: var(--bg-0); border: 1px solid var(--line); border-radius: 8px;
+  padding: var(--sp-3); display: flex; flex-direction: column;
+}
+.msg {
+  max-width: 82%; margin-bottom: var(--sp-2); padding: 7px 11px;
+  border-radius: 10px; font-size: 12.5px; line-height: 1.55;
+  animation: fadeUp .24s ease; word-break: break-word;
+}
+.msg.owner {
+  align-self: flex-end; background: var(--brand-veil); border: 1px solid var(--brand-veil-strong);
+  color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace; font-size: 12px;
+}
+.msg.agent { align-self: flex-start; background: var(--bg-2); border: 1px solid var(--line-strong); color: var(--text-2); }
+.msg.agent.EXECUTED { border-color: rgba(52,201,142,.45); }
+.msg.agent.DENY { border-color: rgba(240,86,79,.45); }
+.msg.agent.REQUIRE_APPROVAL { border-color: rgba(232,163,61,.45); }
+.msg.agent b { color: var(--text-1); font-weight: 600; }
+.msg pre { white-space: pre-wrap; word-break: break-all; margin-top: var(--sp-1); color: var(--text-3); font-size: 11px; max-height: 110px; overflow: auto; }
+.msg .trace { color: var(--info); cursor: pointer; }
+.msg .trace:hover { text-decoration: underline; }
+.sysmsg { align-self: center; color: var(--text-3); font-size: 11.5px; margin: var(--sp-1) 0; }
+.typing {
+  align-self: flex-start; display: inline-flex; gap: 4px;
+  padding: 9px 11px; background: var(--bg-2); border: 1px solid var(--line-strong);
+  border-radius: 10px; margin-bottom: var(--sp-2);
+}
+.typing[hidden] { display: none; }
+.typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-2); animation: blink 1s infinite; }
+.typing i:nth-child(2) { animation-delay: .2s; }
+.typing i:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 0%,100% { opacity: .2; } 50% { opacity: 1; } }
+.vbar { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); }
+.vtrace { color: var(--info); font-size: 11px; cursor: pointer; }
+.qa { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: -2px 0 var(--sp-2) 4px; align-self: flex-start; max-width: 90%; }
+.qa button {
+  padding: 4px 12px; border-radius: 999px; cursor: pointer;
+  background: var(--bg-2); border: 1px solid var(--line-strong); color: var(--text-2);
+  font-size: 12px; transition: transform .12s var(--bounce), background-color .2s, border-color .2s, color .2s;
+}
+.qa button:hover { background: var(--bg-hover); border-color: var(--brand); color: var(--text-1); }
+.qa button:active { transform: scale(.95); }
+.qa button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.qa button.primary { border-color: var(--brand); color: var(--brand-ink); background: var(--brand-veil); }
+.qa button.primary::after { content: " →"; }
+.chat-input { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+.chat-input input {
+  flex: 1; padding: 9px 12px; font-size: 13px; color: var(--text-1);
+  background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: 8px;
+  transition: border-color .2s, box-shadow .2s;
+}
+.chat-input input:focus-visible, .chat-input input:focus {
+  outline: none; border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+
+#main { min-width: 0; }
+.card {
+  background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: var(--sp-4);
+}
+.card h3 {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .12em;
+  color: var(--text-3); margin-bottom: var(--sp-3);
+}
+.row1 { display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; margin-bottom: 20px; }
+.master-grid { display: grid; grid-template-columns: 300px 1fr; gap: var(--sp-4); }
+.kv { display: grid; grid-template-columns: 78px 1fr; gap: var(--sp-1) var(--sp-3); font-size: 12px; }
+.kv dt { color: var(--text-3); } .kv dd { color: var(--text-2); word-break: break-all; }
+.verdict {
+  font: 700 26px/1.2 "Cascadia Code", Consolas, monospace; letter-spacing: .02em;
+  margin-bottom: var(--sp-2);
+}
+.verdict.ALLOW, .verdict.EXECUTED { color: var(--allow); }
+.verdict.DENY { color: var(--deny); }
+.verdict.REQUIRE_APPROVAL { color: var(--warn); }
+.verdict.idle { color: var(--text-3); }
+.caps-list { list-style: none; display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.caps-list li {
+  font: 12px "Cascadia Code", Consolas, monospace; padding: 3px 9px;
+  border: 1px solid var(--line-strong); border-radius: 5px; color: var(--text-2);
+}
+.caps-list li.approval { border-color: var(--warn); color: var(--warn); }
+.empty { color: var(--text-3); font-size: 12px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); font-weight: 600; }
+th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+tr:hover td { background: var(--bg-2); }
+td { color: var(--text-2); }
+td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace; }
+
+#log { height: 320px; overflow-y: auto; font: 12px/1.7 "Cascadia Code", Consolas, monospace; }
+.entry {
+  padding: 6px 10px; border-left: 3px solid var(--line-strong); margin-bottom: 4px;
+  background: var(--bg-2); border-radius: 0 6px 6px 0;
+  animation: fadeUp .24s ease;
+}
+.entry .t { color: var(--text-3); margin-right: 8px; font-size: 11px; }
+.entry .tag { font-size: 10px; padding: 0 6px; border-radius: 3px; margin-right: 8px; border: 1px solid var(--line-strong); color: var(--text-2); }
+.entry.ALLOW, .entry.EXECUTED { border-left-color: var(--allow); }
+.entry.DENY { border-left-color: var(--deny); }
+.entry.REQUIRE_APPROVAL { border-left-color: var(--warn); }
+.entry .trace { color: var(--info); cursor: pointer; }
+.entry .trace:hover { text-decoration: underline; }
+.entry pre { white-space: pre-wrap; word-break: break-all; color: var(--text-2); margin-top: 2px; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+#toasts { position: fixed; right: 20px; bottom: 20px; z-index: 50; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  padding: 9px 14px; border-radius: var(--radius-s); font-size: 12.5px;
+  background: var(--bg-2); border: 1px solid var(--line-strong); color: var(--text-1);
+  animation: fadeUp .24s ease;
+}
+.toast.success { border-color: var(--allow); color: var(--allow); }
+.toast.error { border-color: var(--deny); color: var(--deny); }
+.toast.out { opacity: 0; transition: opacity .3s; }
+
+@media (max-width: 960px) {
+  #layout { grid-template-columns: 1fr; }
+  aside { position: static; height: auto; }
+  .row1 { grid-template-columns: 1fr; }
+  .master-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">AEOS <b>M01</b> Kernel Console</div>
+  <span class="badge">DEMO ONLY</span>
+  <div class="themes" id="themes" role="group" aria-label="主题配色">
+    <button type="button" class="th" data-th="midnight" style="--c:#4f7cf0" title="午夜蓝（默认）" aria-label="主题：午夜蓝"></button>
+    <button type="button" class="th" data-th="violet" style="--c:#8b6ff2" title="紫罗兰" aria-label="主题：紫罗兰"></button>
+    <button type="button" class="th" data-th="magenta" style="--c:#d65aa8" title="洋红" aria-label="主题：洋红"></button>
+    <button type="button" class="th" data-th="cyan" style="--c:#38b6c9" title="青金" aria-label="主题：青金"></button>
+    <button type="button" class="th" data-th="dawn" style="--c:#dfe5ee" title="晨雾白（浅色）" aria-label="主题：晨雾白"></button>
+    <label class="th custom" id="customTh" title="自定义颜色（任意选色，自动生成整套主题）" aria-label="自定义主题颜色">
+      <input type="color" id="customColor" value="#4f7cf0" aria-label="选择任意主题颜色" />
+    </label>
+  </div>
+  <div class="spacer"></div>
+  <div id="health" class="health"><span class="dot"></span><span id="healthText">检查中…</span></div>
+</header>
+
+<div id="layout">
+  <aside>
+    <div class="nav-scroll">
+      <div class="group">
+        <h3>配置</h3>
+        <div class="field"><label>管理员 Token</label><input id="token" value="local-demo-admin" /></div>
+        <div class="field"><label>M07 Secret</label><input id="m07sec" value="local-demo-m07-secret" /></div>
+        <div class="field"><label>M13 Secret</label><input id="m13sec" value="local-demo-m13-secret" /></div>
+        <div class="field"><label>人员 ID</label><input id="person" value="P_1001" /></div>
+        <div class="field"><label>负责人 ID</label><input id="owner" value="P_OWNER" /></div>
+        <div class="field"><label>初始岗位</label><input id="position" value="POS_STAFF" /></div>
+        <div class="field"><label>租户</label><input id="tenant" value="TENANT_A" /></div>
+      </div>
+      <div class="group">
+        <h3>总控 Agent · 快捷口令</h3>
+        <button class="btn" data-action="sayPhrase" data-say="注册总控">注册总控 Agent<span class="hint">对话</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="sayPhrase" data-say="让 P_1001 入职，岗位 POS_STAFF">「来个人入职」<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="sayPhrase" data-say="把 P_1001 调到经理岗">「调到经理岗」<span class="btn-spinner"></span></button>
+        <button class="btn danger" data-action="sayPhrase" data-say="让 P_1001 离职">▲「让 P_1001 离职」<span class="hint">高风险</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="sayPhrase" data-say="注册子 Agent A_CHILD_1001，归属 P_1001，scope task:execute">「注册个子 Agent」<span class="btn-spinner"></span></button>
+        <button class="btn danger" data-action="sayPhrase" data-say="撤销 P_1001">▲「撤销 P_1001」<span class="hint">高风险</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="sayPhrase" data-say="看看系统状态">「看看系统状态」<span class="btn-spinner"></span></button>
+      </div>
+      <div class="group">
+        <h3>M07 人事事件（HMAC）</h3>
+        <button class="btn" data-action="m07hire">入职绑定岗位<span class="hint">hired</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="m07transfer">调岗 → 经理<span class="hint">moved</span><span class="btn-spinner"></span></button>
+        <button class="btn danger" data-action="m07offboard">▲ 离职撤权<span class="hint">fired</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="m07dup">重发上一事件<span class="hint">幂等</span><span class="btn-spinner"></span></button>
+      </div>
+      <div class="group">
+        <h3>POMS 能力 / 授权</h3>
+        <button class="btn" data-action="caps">查询能力<span class="hint">caps</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="authTask">判权 task:execute<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="authExport">▲ 判权 data:export<span class="hint">risk</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="authDevice">▲ 判权 device:control<span class="hint">risk</span><span class="btn-spinner"></span></button>
+      </div>
+      <div class="group">
+        <h3>M13 Agent（HMAC）</h3>
+        <button class="btn" data-action="agentReg">注册主 Agent<span class="hint">main</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="agentChild">注册子 Agent<span class="hint">clamp</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="agentAuthTask">Agent 判权 task<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="agentAuthExport">▲ Agent 判权 export<span class="btn-spinner"></span></button>
+      </div>
+      <div class="group">
+        <h3>系统观测</h3>
+        <button class="btn" data-action="refreshStatus">刷新状态<span class="hint">status</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="refreshAudit">拉取审计<span class="hint">audit</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="clearLog">清空日志<span class="btn-spinner"></span></button>
+      </div>
+    </div>
+    <div class="side-anchor" id="anchor">
+      <div class="row"><span class="k">负责人</span><span class="v" id="aOwner">P_OWNER</span></div>
+      <div class="row"><span class="k">总控</span><span class="v"><span class="st unregistered" id="aMasterSt">未注册</span></span></div>
+      <div class="row"><span class="k">租户</span><span class="v" id="aTenant">TENANT_A</span></div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div class="card" style="margin-bottom:20px">
+      <h3>负责人指令台 · 与总控 Agent 对话（大白话即可）</h3>
+      <div class="chatwrap">
+        <div class="chat-head">
+          <span class="st unregistered" id="mStatus">总控未注册</span>
+          <span class="ctitle">总控 Agent · 负责人下属 · 即时反馈 · 选项点选即答</span>
+        </div>
+        <div id="chat" class="chat" aria-live="polite">
+          <div class="sysmsg">直接对总控 Agent 说事，例如「让 P_1001 入职」「把 P_1001 调到经理岗」「看看系统状态」</div>
+          <div class="typing" id="typing" hidden aria-label="总控 Agent 正在处理"><i></i><i></i><i></i></div>
+        </div>
+        <div class="chat-input">
+          <input id="sayInput" placeholder="对总控 Agent 说：让 P_1001 入职，岗位 POS_STAFF…" aria-label="用大白话下达指令" autocomplete="off" />
+          <button class="btn send" data-action="saySend" style="width:auto;min-width:96px;margin:0"><span class="btn-label">发送</span><span class="btn-spinner"></span></button>
+        </div>
+      </div>
+    </div>
+      <div class="hist-wrap">
+        <div class="hist-head">指令历史 <span class="mono" id="histCount">(0)</span><span class="hist-tip">点击条目回填输入框</span></div>
+        <ul id="hist" class="hist"><li class="empty">本会话暂无指令</li></ul>
+      </div>
+    </div>
+    <div class="row1">
+      <div class="card">
+        <h3>最近决策</h3>
+        <div id="verdict" class="verdict idle">—</div>
+        <dl class="kv">
+          <dt>主体</dt><dd id="vPrincipal">-</dd>
+          <dt>动作</dt><dd id="vAction">-</dd>
+          <dt>理由</dt><dd id="vReason">发起一次判权以查看结果</dd>
+          <dt>Trace</dt><dd id="vTrace" class="mono">-</dd>
+        </dl>
+      </div>
+      <div class="card">
+        <h3>主体能力快照</h3>
+        <div id="capsBox"><p class="empty">查询能力后显示</p></div>
+        <dl class="kv" style="margin-top:12px">
+          <dt>主体</dt><dd id="cPrincipal">-</dd>
+          <dt>状态</dt><dd id="cStatus">-</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <h3>人员状态</h3>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Person</th><th>租户</th><th>状态</th><th>岗位</th><th>seq</th></tr></thead>
+          <tbody id="personRows"><tr><td colspan="5" class="empty">暂无数据，刷新状态</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Agent 状态</h3>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Agent</th><th>Owner</th><th>父级</th><th>Scopes</th><th>状态</th></tr></thead>
+          <tbody id="agentRows"><tr><td colspan="5" class="empty">暂无数据，刷新状态</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="margin-top:20px">
+      <h3>活动日志（本页会话）</h3>
+      <div id="log"></div>
+    </div>
+  </main>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const logBox = $('log');
+let lastEvent = null;
+
+const THEMES = ['midnight', 'violet', 'magenta', 'cyan', 'dawn', 'custom'];
+
+function hexToHsl(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
+  if (!m) return { h: 220, s: 80, l: 60 };
+  const n = parseInt(m[1], 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0, s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+    else if (max === g) h = ((b - r) / d + 2) * 60;
+    else h = ((r - g) / d + 4) * 60;
+  }
+  return { h, s: s * 100, l: l * 100 };
+}
+const hslStr = (h, s, l, a) => a == null ? `hsl(${h.toFixed(0)} ${s.toFixed(0)}% ${l.toFixed(0)}%)` : `hsl(${h.toFixed(0)} ${s.toFixed(0)}% ${l.toFixed(0)}% / ${a})`;
+const angDist = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+
+const SEMANTIC_BANDS = [[150, '决策绿'], [5, '决策红'], [38, '决策琥珀']];
+
+function applyCustomTheme(hex) {
+  let { h, s } = hexToHsl(hex);
+  s = Math.min(Math.max(s, 45), 95);
+  const nudged = SEMANTIC_BANDS.some(([bh]) => angDist(h, bh) < 14);
+  if (nudged) h = (h + 20) % 360;
+  const root = document.documentElement;
+  root.dataset.theme = 'custom';
+  const set = (k, v) => root.style.setProperty(k, v);
+  set('--brand', hslStr(h, s, 60));
+  set('--brand-strong', hslStr(h, s, 51));
+  set('--brand-ring', hslStr(h, s, 62, 0.18));
+  set('--brand-veil', hslStr(h, s, 62, 0.15));
+  set('--brand-veil-strong', hslStr(h, s, 62, 0.38));
+  set('--brand-ink', hslStr(h, 65, 84));
+  set('--bg-topbar', hslStr(h, 20, 5, 0.88));
+  set('--bg-0', hslStr(h, 18, 5));
+  set('--bg-1', hslStr(h, 18, 7));
+  set('--bg-2', hslStr(h, 18, 10));
+  set('--bg-hover', hslStr(h, 18, 13));
+  set('--bg-side', hslStr(h, 18, 6));
+  set('--line', hslStr(h, 16, 16));
+  set('--line-strong', hslStr(h, 16, 24));
+  root.style.setProperty('--custom-c', hex);
+  try { localStorage.setItem('m01-theme', 'custom'); localStorage.setItem('m01-theme-color', hex); } catch {}
+  document.querySelectorAll('.th').forEach((b) => b.classList.toggle('active', b.id === 'customTh'));
+  $('customColor').value = /^#[0-9a-f]{6}$/i.test(hex) ? hex : '#4f7cf0';
+  return nudged;
+}
+
+function applyTheme(t) {
+  if (!THEMES.includes(t)) t = 'midnight';
+  if (t === 'custom') {
+    let hex = null;
+    try { hex = localStorage.getItem('m01-theme-color'); } catch {}
+    applyCustomTheme(hex || '#4f7cf0');
+    return;
+  }
+  document.documentElement.style.cssText = '';
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('m01-theme', t); } catch {}
+  document.querySelectorAll('.th').forEach((b) => b.classList.toggle('active', b.dataset.th === t));
+}
+$('themes').addEventListener('click', (ev) => {
+  const b = ev.target.closest('.th[data-th]');
+  if (b) applyTheme(b.dataset.th);
+});
+$('customColor').addEventListener('input', (ev) => {
+  const nudged = applyCustomTheme(ev.target.value);
+  if (nudged) toast('已自动微调色相，避开决策语义色区间', '');
+});
+applyTheme((() => { try { return localStorage.getItem('m01-theme'); } catch { return 'midnight'; } })());
+
+function toast(msg, kind = '') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.textContent = msg;
+  $('toasts').appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 350); }, 2500);
+}
+
+function log(tag, obj, cls = '') {
+  const e = document.createElement('div');
+  e.className = 'entry ' + cls;
+  const trace = obj && obj.trace_id ? ` <span class="trace" data-trace="${obj.trace_id}" title="点击复制">[${obj.trace_id.slice(0, 8)}]</span>` : '';
+  e.innerHTML = `<span class="t">${new Date().toLocaleTimeString('zh-CN', { hour12: false })}</span><span class="tag">${tag}</span>${trace}<pre>${esc(JSON.stringify(obj, null, 1))}</pre>`;
+  logBox.appendChild(e);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+
+logBox.addEventListener('click', (ev) => {
+  const t = ev.target.closest('.trace');
+  if (!t) return;
+  navigator.clipboard.writeText(t.dataset.trace).then(() => toast('trace_id 已复制', 'success'));
+});
+
+const headers = () => ({ 'Authorization': 'Bearer ' + $('token').value, 'Content-Type': 'application/json' });
+async function hmacHeader(secret, body) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(body));
+  const hex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return { 'Content-Type': 'application/json', 'X-M01-Signature': 'sha256=' + hex };
+}
+async function api(method, path, body, hdrs) {
+  const t0 = performance.now();
+  const res = await fetch(path, { method, headers: hdrs, body: body ? JSON.stringify(body) : undefined });
+  const ms = Math.round(performance.now() - t0);
+  const data = await res.json().catch(() => ({}));
+  return { status: res.status, ok: res.ok, ms, data };
+}
+
+function setMasterUI(master) {
+  const stEl = $('mStatus'), anEl = $('aMasterSt');
+  if (!master) {
+    stEl.className = 'st unregistered'; stEl.textContent = '总控未注册';
+    anEl.className = 'st unregistered'; anEl.textContent = '未注册';
+    return;
+  }
+  const cls = master.status === 'active' ? 'active' : master.status;
+  stEl.className = 'st ' + cls; stEl.textContent = master.status === 'active' ? '总控在线' : '总控 ' + master.status;
+  anEl.className = 'st ' + cls; anEl.textContent = master.status === 'active' ? '在线' : master.status;
+  $('aOwner').textContent = master.owner_person_id;
+}
+
+const chatBox = $('chat');
+const typingEl = $('typing');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const chatScroll = () => { chatBox.scrollTop = chatBox.scrollHeight; };
+
+function ownerMsg(text) {
+  const e = document.createElement('div');
+  e.className = 'msg owner';
+  e.textContent = text;
+  chatBox.insertBefore(e, typingEl);
+  chatScroll();
+}
+function agentMsg(html, kind = '') {
+  const e = document.createElement('div');
+  e.className = 'msg agent ' + kind;
+  e.innerHTML = html;
+  chatBox.insertBefore(e, typingEl);
+  chatScroll();
+}
+function typing(on) {
+  typingEl.hidden = !on;
+  chatScroll();
+}
+chatBox.addEventListener('click', (ev) => {
+  const t = ev.target.closest('.trace');
+  if (!t) return;
+  navigator.clipboard.writeText(t.dataset.trace).then(() => toast('trace_id 已复制', 'success'));
+});
+
+let chatBusy = false;
+function renderChips(actions) {
+  if (!actions || !actions.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'qa';
+  wrap.innerHTML = actions.map((a, i) =>
+    `<button type="button" class="${a.primary ? 'primary' : ''}" data-prompt="${esc(a.prompt)}" title="将发送：${esc(a.prompt)}">${esc(a.label)}</button>`).join('');
+  chatBox.insertBefore(wrap, typingEl);
+  chatScroll();
+}
+chatBox.addEventListener('click', (ev) => {
+  const chip = ev.target.closest('.qa button');
+  if (!chip || chatBusy) return;
+  sayText(chip.dataset.prompt);
+});
+
+async function sayText(text) {
+  if (chatBusy || !text.trim()) return;
+  chatBusy = true;
+  document.querySelectorAll('.qa button').forEach((b) => { b.disabled = true; b.style.opacity = .45; });
+  ownerMsg(text);
+  typing(true);
+  const t0 = performance.now();
+  let r;
+  try {
+    r = await api('POST', '/kernel/v1/master/say', { tenant_id: $('tenant').value, text }, headers());
+  } catch {
+    typing(false);
+    agentMsg('✗ 通道异常，指令未送达', 'DENY');
+    chatBusy = false;
+    return;
+  }
+  const ms = Math.round(performance.now() - t0);
+  typing(false);
+  log(`SAY ${r.status} · ${ms}ms`, r.data, r.data.decision || '');
+  if (!r.ok) {
+    agentMsg(`✗ 通道异常：HTTP ${r.status}`, 'DENY');
+    chatBusy = false;
+    return;
+  }
+  const d = r.data;
+  const trace = d.trace_id ? ` <span class="trace" data-trace="${d.trace_id}" title="点击复制">[${d.trace_id.slice(0, 8)}]</span>` : '';
+  agentMsg(`${esc(d.content)}${trace}${d.output != null ? `<pre>${esc(JSON.stringify(d.output, null, 1))}</pre>` : ''}`, d.decision || '');
+  renderChips(d.quick_actions);
+  if (d.decision && d.command) {
+    pushHistory({ command: d.command, decision: d.decision, trace_id: d.trace_id, reason: d.content }, {});
+    if (d.decision === 'EXECUTED') await actions.refreshStatus().catch(() => {});
+  }
+  chatBusy = false;
+  document.querySelectorAll('.qa button').forEach((b) => { b.disabled = false; b.style.opacity = ''; });
+}
+
+function renderDecision(d) {
+  const v = $('verdict');
+  v.textContent = d.decision || '—';
+  v.className = 'verdict ' + (d.decision || 'idle');
+  $('vPrincipal').textContent = d.principal_id || '-';
+  $('vAction').textContent = d.resource ? `${d.resource}:${d.action}` : '-';
+  $('vReason').textContent = d.reason || '-';
+  $('vTrace').textContent = d.trace_id || '-';
+}
+
+function renderCaps(d) {
+  $('cPrincipal').textContent = d.principal_id || '-';
+  $('cStatus').textContent = d.status || '-';
+  const box = $('capsBox');
+  if (!d.capabilities || !d.capabilities.length) {
+    box.innerHTML = '<p class="empty">无获准能力</p>';
+    return;
+  }
+  box.innerHTML = '<ul class="caps-list">' + d.capabilities.map((c) =>
+    `<li class="${c.require_approval ? 'approval' : ''}" title="${c.require_approval ? '高风险：需批准票据' : ''}">${c.resource}:${c.action}${c.require_approval ? ' ▲' : ''}</li>`).join('') + '</ul>';
+}
+
+function renderStatus(d) {
+  setMasterUI(d.master);
+  $('aTenant').textContent = d.master?.tenant_id || $('tenant').value;
+  const pr = $('personRows');
+  pr.innerHTML = d.persons.length ? d.persons.map((p) =>
+    `<tr><td class="pid">${p.person_id}</td><td>${p.tenant_id}</td><td><span class="st ${p.status}">${p.status}</span></td><td>${p.position_id || '-'}</td><td>${p.seq}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="empty">暂无人员</td></tr>';
+  const ar = $('agentRows');
+  ar.innerHTML = d.agents.length ? d.agents.map((a) =>
+    `<tr><td class="pid">${a.agent_id}</td><td class="pid">${a.owner_person_id}</td><td>${a.parent_agent_id || '-'}</td><td>${a.scopes.length > 3 ? a.scopes.length + ' scopes' : (a.scopes.join(', ') || '-')}</td><td><span class="st ${a.status}">${a.status}</span></td></tr>`).join('')
+    : '<tr><td colspan="5" class="empty">暂无 Agent</td></tr>';
+}
+
+const NL_TEMPLATES = {
+  'person.hire': (p) => `让 ${p.person_id} 入职，岗位 ${p.position_id || 'POS_STAFF'}`,
+  'person.transfer': (p) => `把 ${p.person_id} 调到 ${p.position_id === 'POS_MANAGER' ? '经理' : p.position_id || '员工'}岗`,
+  'person.offboard': (p) => `确认让 ${p.person_id} 离职`,
+  'agent.register': (p) => `注册子 Agent ${p.agent_id}，归属 ${p.owner_person_id || 'P_1001'}，scope ${(p.scopes && p.scopes[0]) || 'task:execute'}`,
+  'agent.revoke': (p) => `确认撤销 Agent ${p.agent_id}`,
+  'principal.revoke': (p) => `确认撤销 ${p.principal_id}`,
+  'capabilities.query': (p) => `查一下 ${p.principal_id} 的能力`,
+  'authorize.check': (p) => `判断 ${p.principal_id} 能不能 ${p.resource}:${p.action}`,
+  'system.status': () => '看看系统状态',
+  'audit.tail': () => '看看最近的审计'
+};
+
+const history = [];
+function pushHistory(r, params) {
+  history.unshift({ time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), command: r.command, decision: r.decision, trace_id: r.trace_id, reason: r.reason || '执行成功', params: { ...params } });
+  if (history.length > 20) history.pop();
+  renderHistory();
+}
+function renderHistory() {
+  $('histCount').textContent = `(${history.length})`;
+  $('hist').innerHTML = history.length ? history.map((h, i) =>
+    `<li data-i="${i}" title="点击回填输入框"><span class="t">${h.time}</span><span class="chip ${h.decision}">${h.decision}</span><span class="hcmd">${h.command}</span><span class="hwhy">${esc(h.reason)}</span></li>`).join('')
+    : '<li class="empty">本会话暂无指令</li>';
+}
+$('hist').addEventListener('click', (ev) => {
+  const li = ev.target.closest('li[data-i]');
+  if (!li) return;
+  const h = history[Number(li.dataset.i)];
+  const tpl = NL_TEMPLATES[h.command];
+  $('sayInput').value = tpl ? tpl(h.params || {}) : h.command;
+  $('sayInput').focus();
+  toast('已回填输入框');
+});
+
+async function m07(type, positionId) {
+  const event = {
+    event_id: 'EVT_' + crypto.randomUUID(),
+    tenant_id: $('tenant').value, type, person_id: $('person').value,
+    position_id: type === 'person.offboarded' ? undefined : positionId,
+    seq: Date.now()
+  };
+  lastEvent = event;
+  const raw = JSON.stringify(event);
+  const r = await api('POST', '/integrations/m07', event, await hmacHeader($('m07sec').value, raw));
+  log(`M07 ${r.status} · ${r.ms}ms`, r.data, r.ok ? '' : 'DENY');
+  return r;
+}
+
+const actions = {
+  async saySend() {
+    const v = $('sayInput').value.trim();
+    if (!v) { toast('说点什么再发送', 'error'); throw new Error('empty'); }
+    $('sayInput').value = '';
+    await sayText(v);
+  },
+  async sayPhrase(btn) { await sayText(btn.dataset.say || ''); },
+  async masterRegister() {
+    const r = await api('POST', '/kernel/v1/master/register', { tenant_id: $('tenant').value, owner_person_id: $('owner').value }, headers());
+    log('MASTER注册', r.data, r.ok ? 'EXECUTED' : 'DENY');
+    if (r.ok) { toast('总控 Agent 已注册', 'success'); setMasterUI(r.data.master); }
+  },
+  async m07hire() { await m07('person.hired', $('position').value); },
+  async m07transfer() { await m07('person.transferred', 'POS_MANAGER'); },
+  async m07offboard() { await m07('person.offboarded'); },
+  async m07dup() {
+    if (!lastEvent) { toast('请先发一个 M07 事件', 'error'); throw new Error('no event'); }
+    const raw = JSON.stringify(lastEvent);
+    const r = await api('POST', '/integrations/m07', lastEvent, await hmacHeader($('m07sec').value, raw));
+    log(`M07重发 ${r.status}`, r.data, r.ok ? '' : 'DENY');
+  },
+  async caps() {
+    const r = await api('POST', '/kernel/v1/capabilities', { principal_id: $('person').value, tenant_id: $('tenant').value }, headers());
+    log(`CAPS ${r.status}`, r.data, r.ok ? 'ALLOW' : 'DENY');
+    if (r.ok) renderCaps(r.data);
+  },
+  async _auth(principalId, resource, action) {
+    const r = await api('POST', '/kernel/v1/authorize', { tenant_id: $('tenant').value, principal_id: principalId, resource, action }, headers());
+    log(`AUTH ${r.status}`, r.data, r.data.decision || '');
+    if (r.ok) renderDecision(r.data);
+    if (!r.ok) toast('请求失败：' + r.status, 'error');
+  },
+  async authTask() { await this._auth($('person').value, 'task', 'execute'); },
+  async authExport() { await this._auth($('person').value, 'data', 'export'); },
+  async authDevice() { await this._auth($('person').value, 'device', 'control'); },
+  async _m13(type, scopes, agentId, parent) {
+    const event = {
+      event_id: 'EVT_' + crypto.randomUUID(),
+      tenant_id: $('tenant').value, type, agent_id: agentId,
+      owner_person_id: $('person').value, parent_agent_id: parent,
+      scopes
+    };
+    const raw = JSON.stringify(event);
+    const r = await api('POST', '/integrations/m13', event, await hmacHeader($('m13sec').value, raw));
+    log(`M13 ${r.status} · ${r.ms}ms`, r.data, r.ok ? '' : 'DENY');
+    if (r.ok && r.data.clamped_scopes && r.data.clamped_scopes.length) toast('子 Agent 申请被收敛：' + r.data.clamped_scopes.join(', '), 'error');
+  },
+  async agentReg() { await this._m13('agent.registered', ['task:execute'], 'A_MAIN_1001', null); },
+  async agentChild() { await this._m13('agent.registered', ['task:execute', 'data:export'], 'A_CHILD_1001', 'A_MAIN_1001'); },
+  async agentAuthTask() { await this._auth('A_MAIN_1001', 'task', 'execute'); },
+  async agentAuthExport() { await this._auth('A_MAIN_1001', 'data', 'export'); },
+  async refreshStatus() {
+    const r = await api('GET', '/kernel/v1/status', null, headers());
+    log(`STATUS ${r.status}`, { master: r.data.master?.status || 'unregistered', persons: r.data.persons?.length, agents: r.data.agents?.length, events: r.data.events_received, audit: r.data.audit_entries });
+    if (r.ok) renderStatus(r.data);
+  },
+  async refreshAudit() {
+    const r = await api('GET', '/kernel/v1/audit', null, headers());
+    if (r.ok) {
+      r.data.entries.slice(-30).forEach((e) => log('AUDIT', e, e.decision || ''));
+      toast(`已拉取审计 ${r.data.total} 条`, 'success');
+    } else { log('AUDIT', r.data); }
+  },
+  clearLog() { logBox.innerHTML = ''; }
+};
+
+document.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('button[data-action]');
+  if (!btn || btn.disabled) return;
+  const fn = actions[btn.dataset.action];
+  if (!fn) return;
+  btn.classList.add('loading');
+  btn.disabled = true;
+  try {
+    await fn.call(actions, btn);
+    btn.classList.remove('loading');
+    btn.classList.add('success');
+    setTimeout(() => { btn.classList.remove('success'); btn.disabled = false; }, 1200);
+    if (/^(m07|agent|revoke|master)/.test(btn.dataset.action)) await actions.refreshStatus().catch(() => {});
+  } catch (e) {
+    btn.classList.remove('loading');
+    btn.disabled = false;
+    const quiet = ['no event', 'ack required', 'invalid params', 'empty'];
+    if (!quiet.includes(String(e.message || e))) toast('操作失败：' + (e.message || e), 'error');
+  }
+});
+
+(async () => {
+  const t0 = performance.now();
+  try {
+    const r = await fetch('/health');
+    const d = await r.json();
+    const ms = Math.round(performance.now() - t0);
+    $('health').className = 'health online';
+    $('healthText').textContent = `online · ${ms}ms`;
+    log('HEALTH', d);
+  } catch {
+    $('health').className = 'health offline';
+    $('healthText').textContent = 'offline';
+    log('HEALTH', { error: 'unreachable' });
+  }
+  await actions.refreshStatus().catch(() => {});
+  $('sayInput').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('sayInput') && document.querySelector('button[data-action="saySend"]').click(); });
+  renderChips([
+    { label: '让 P_1001 入职', prompt: '让 P_1001 入职，岗位 POS_STAFF', primary: true },
+    { label: '看看系统状态', prompt: '看看系统状态' },
+    { label: '查 P_1001 的权限', prompt: '查一下 P_1001 的能力' }
+  ]);
+})();
+</script>
+</body>
+</html>
