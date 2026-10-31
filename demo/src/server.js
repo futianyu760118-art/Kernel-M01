@@ -5,6 +5,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { M01Kernel } from './kernel.js';
+import { createOidcVerifier } from './oidc.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -27,6 +28,18 @@ function readFileLines(path) {
 }
 
 export function createApp(kernel = new M01Kernel(), config = {}) {
+  const mode = String(config.mode || process.env.M01_MODE || 'demo').toLowerCase();
+  const oidcConfig = {
+    ...(config.oidc || {}),
+    issuer: config.oidc?.issuer || config.oidcIssuer || process.env.M01_OIDC_ISSUER,
+    audience: config.oidc?.audience || config.oidcAudience || process.env.M01_OIDC_AUDIENCE,
+    jwksUri: config.oidc?.jwksUri || config.oidcJwksUri || process.env.M01_OIDC_JWKS_URI,
+    requiredScope: config.oidc?.requiredScope || config.requiredScope || process.env.M01_OIDC_REQUIRED_SCOPE
+  };
+  const oidcVerifier = mode === 'oidc' ? createOidcVerifier(oidcConfig) : null;
+  const requiredScope = oidcConfig.requiredScope || 'm01:policy:read';
+  const adminScope = config.adminScope || oidcConfig.adminScope || process.env.M01_OIDC_ADMIN_SCOPE || 'm01:admin';
+  const delegateScope = config.delegateScope || oidcConfig.delegateScope || 'm01:policy:delegate';
   const adminToken = config.adminToken || process.env.M01_ADMIN_TOKEN || 'local-demo-admin';
   const m07Secret = config.m07Secret || process.env.M07_WEBHOOK_SECRET || 'local-demo-m07-secret';
   const m13Secret = config.m13Secret || process.env.M13_WEBHOOK_SECRET || 'local-demo-m13-secret';
@@ -53,12 +66,28 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     return safeEqual(header.slice(7), adminToken);
   };
 
+  const hasScope = (principal, scope) => principal.scope.includes(scope);
+  const authenticateKernel = async (req) => {
+    const header = String(req.headers.authorization || '');
+    if (!header.startsWith('Bearer ')) return { ok: false, status: 401, error: 'missing or invalid bearer token' };
+    if (mode === 'demo') return checkAdmin(req) ? { ok: true, principal: null } : { ok: false, status: 401, error: 'missing or invalid service token' };
+    try {
+      const principal = await oidcVerifier.verify(header.slice(7));
+      const current = kernel.authorizationStatus(principal.principal_id);
+      if (current.ok !== false && principal.authz_version < current.authz_version) return { ok: false, status: 401, error: 'stale authorization version' };
+      if (!hasScope(principal, requiredScope)) return { ok: false, status: 403, error: 'missing required scope' };
+      return { ok: true, principal };
+    } catch {
+      return { ok: false, status: 401, error: 'invalid or unverifiable bearer token' };
+    }
+  };
+
   const send = (res, status, payload) => {
     const body = JSON.stringify(payload, null, 2);
     res.writeHead(status, {
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Length': Buffer.byteLength(body),
-      'X-M01-Environment': 'DEMO ONLY'
+      'X-M01-Environment': mode === 'oidc' ? 'OIDC' : 'DEMO ONLY'
     });
     res.end(body);
   };
@@ -104,7 +133,7 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     res.writeHead(200, {
       'Content-Type': types[extname(target)] || 'application/octet-stream',
       'Content-Length': data.length,
-      'X-M01-Environment': 'DEMO ONLY'
+      'X-M01-Environment': mode === 'oidc' ? 'OIDC' : 'DEMO ONLY'
     });
     res.end(data);
   };
@@ -115,7 +144,7 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
 
     try {
       if (req.method === 'GET' && pathname === '/health') {
-        send(res, 200, { status: 'ok', service: 'aeos-m01-kernel', environment: 'DEMO ONLY' });
+        send(res, 200, { status: 'ok', service: 'aeos-m01-kernel', mode, environment: mode === 'oidc' ? 'OIDC' : 'DEMO ONLY' });
         return;
       }
 
@@ -150,16 +179,34 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
       }
 
       if (pathname.startsWith('/kernel/')) {
+        const auth = await authenticateKernel(req);
+        if (!auth.ok) {
+          send(res, auth.status || 401, { error: auth.error });
+          return;
+        }
+        const principal = auth.principal;
         if (pathname === '/kernel/v1/approvals' && req.method === 'POST') {
           send(res, 501, { error: 'approval workflow not implemented in DEMO; high-risk actions stay REQUIRE_APPROVAL / fail closed' });
           return;
         }
-        if (!checkAdmin(req)) {
-          send(res, 401, { error: 'missing or invalid service token' });
+        const adminRoute = pathname === '/kernel/v1/status' || pathname === '/kernel/v1/audit' || pathname === '/kernel/v1/revocations';
+        if (mode === 'oidc' && adminRoute && !hasScope(principal, adminScope)) {
+          send(res, 403, { error: 'missing admin scope' });
+          return;
+        }
+        const authorizationPath = pathname.match(/^\/kernel\/v1\/principals\/([^/]+)\/authorization$/);
+        if (req.method === 'GET' && authorizationPath) {
+          const target = decodeURIComponent(authorizationPath[1]);
+          if (mode === 'oidc' && target !== principal.principal_id && !hasScope(principal, adminScope)) {
+            send(res, 403, { error: 'admin scope required to inspect another principal' });
+            return;
+          }
+          const result = kernel.authorizationStatus(target);
+          send(res, result.ok === false ? result.status || 404 : 200, result.ok === false ? { error: result.error } : result);
           return;
         }
         if (req.method === 'GET' && pathname === '/kernel/v1/status') {
-          send(res, 200, { ...kernel.status(), environment: 'DEMO ONLY' });
+          send(res, 200, { ...kernel.status(), environment: mode === 'oidc' ? 'OIDC' : 'DEMO ONLY', mode });
           return;
         }
         if (req.method === 'GET' && pathname === '/kernel/v1/audit') {
@@ -176,6 +223,28 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
           return;
         }
         const body = parsed.data;
+        if (mode === 'oidc') {
+          if (body.tenant_id && body.tenant_id !== principal.tenant_id) {
+            send(res, 403, { error: 'tenant boundary violation' });
+            return;
+          }
+          body.tenant_id = principal.tenant_id;
+          if (pathname === '/kernel/v1/capabilities' || pathname === '/kernel/v1/authorize') {
+            const requested = body.principal_id || principal.principal_id;
+            if (requested !== principal.principal_id && !hasScope(principal, delegateScope)) {
+              body.principal_id = principal.principal_id;
+            } else if (requested !== principal.principal_id) {
+              const target = kernel.authorizationStatus(requested);
+              if (target.ok === false || target.tenant_id !== principal.tenant_id) {
+                send(res, 403, { error: 'delegation tenant boundary violation' });
+                return;
+              }
+              body.principal_id = requested;
+            } else {
+              body.principal_id = principal.principal_id;
+            }
+          }
+        }
         if (pathname === '/kernel/v1/capabilities') {
           if (!body.principal_id) {
             send(res, 400, { error: 'required: principal_id' });
