@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, createSign } from 'node:crypto';
-import { createApp } from '../src/server.js';
+import { createApp, start } from '../src/server.js';
 import { M01Kernel } from '../src/kernel.js';
 import { createOidcVerifier } from '../src/oidc.js';
 
@@ -71,6 +71,10 @@ test('OIDC verifier rejects unknown keys, invalid claims, and unsupported algori
   await assert.rejects(() => verifier.verify(token({ sub: '' })), /sub/);
   await assert.rejects(() => verifier.verify(token({ authz_version: '1' })), /authz_version/);
   await assert.rejects(() => verifier.verify(token({}, { kid: 'unknown-key' })), /kid/);
+  const signed = token();
+  const tampered = `${signed.slice(0, -1)}${signed.endsWith('A') ? 'B' : 'A'}`;
+  await assert.rejects(() => verifier.verify(tampered), /signature/);
+  await assert.rejects(() => verifier.verify(token({ nbf: Math.floor(Date.now() / 1000) + 60 })), /not yet valid/);
 });
 
 test('OIDC mode fails closed and exposes the selected mode without secrets', async (t) => {
@@ -105,19 +109,89 @@ test('OIDC policy requests use verified identity and require explicit same-tenan
   assert.equal(crossTenant.status, 403);
 });
 
+test('OIDC master endpoints require the admin scope in addition to policy scope', async (t) => {
+  const kernel = new M01Kernel();
+  kernel.applyM07Event({ event_id: 'master-owner', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_AUTH', position_id: 'POS_OWNER', seq: 1 });
+  const { server, base } = await startOidc(kernel);
+  t.after(() => server.close());
+  const policyOnly = token();
+  for (const [path, body, method] of [
+    ['/kernel/v1/master/register', { tenant_id: 'TENANT_A', owner_person_id: 'P_AUTH' }, 'POST'],
+    ['/kernel/v1/master/command', { tenant_id: 'TENANT_A', command: 'system.status', params: {} }, 'POST'],
+    ['/kernel/v1/master/say', { tenant_id: 'TENANT_A', text: '看看系统状态' }, 'POST']
+  ]) {
+    const response = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${policyOnly}` }, body: JSON.stringify(body) });
+    assert.equal(response.status, 403, path);
+  }
+  const admin = await postJson(base, '/kernel/v1/master/register', { tenant_id: 'TENANT_A', owner_person_id: 'P_AUTH' }, token({ scope: ['m01:policy:read', 'm01:admin'] }));
+  assert.equal(admin.status, 200);
+});
+
+test('unknown modes and production startup without an explicit mode fail closed', () => {
+  assert.throws(() => createApp(new M01Kernel(), { mode: 'staging', adminToken: 'should-not-enable-demo' }), /mode/i);
+  const previous = process.env.M01_MODE;
+  delete process.env.M01_MODE;
+  try {
+    assert.throws(() => start(), /M01_MODE/);
+  } finally {
+    if (previous === undefined) delete process.env.M01_MODE;
+    else process.env.M01_MODE = previous;
+  }
+  assert.throws(() => createApp(new M01Kernel(), { mode: 'oidc', oidc: {} }), /issuer/);
+});
+
 test('OIDC rejects a stale authz_version and reports the current version read-only', async (t) => {
   const kernel = new M01Kernel();
   kernel.applyM07Event({ event_id: 'person-versioned', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_AUTH', position_id: 'POS_STAFF', seq: 1 });
+  kernel.applyM07Event({ event_id: 'admin-versioned', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_ADMIN', position_id: 'POS_OWNER', seq: 1 });
   const { server, base } = await startOidc(kernel);
   t.after(() => server.close());
   kernel.revoke('P_AUTH', 'test revocation');
   const stale = await postJson(base, '/kernel/v1/authorize', { tenant_id: 'TENANT_A', resource: 'task', action: 'execute' });
   assert.equal(stale.status, 401);
   assert.match(stale.data.error, /stale|revoked/i);
-  const current = await fetch(base + '/kernel/v1/principals/P_AUTH/authorization', { headers: { Authorization: `Bearer ${token({ authz_version: 2 })}` } });
+  const current = await fetch(base + '/kernel/v1/principals/P_AUTH/authorization', { headers: { Authorization: `Bearer ${token({ sub: 'P_ADMIN', scope: ['m01:policy:read', 'm01:admin'] })}` } });
   assert.equal(current.status, 200);
   assert.deepEqual(await current.json(), { principal_id: 'P_AUTH', tenant_id: 'TENANT_A', authz_version: 2, revoked: true });
   assert.ok(kernel.auditLog.some((entry) => entry.kind === 'authorization.version_changed' && entry.principal_id === 'P_AUTH' && entry.trace_id));
+});
+
+test('OIDC rejects a revoked principal even when its token carries the current version', async (t) => {
+  const kernel = new M01Kernel();
+  kernel.applyM07Event({ event_id: 'person-revoked-current', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_AUTH', position_id: 'POS_STAFF', seq: 1 });
+  kernel.revoke('P_AUTH', 'current version is still revoked');
+  const { server, base } = await startOidc(kernel);
+  t.after(() => server.close());
+  const response = await postJson(base, '/kernel/v1/authorize', { tenant_id: 'TENANT_A', resource: 'task', action: 'execute' }, token({ authz_version: 2 }));
+  assert.equal(response.status, 401);
+  assert.match(response.data.error, /revoked/i);
+});
+
+test('agent revocation cascades recursively and versions every descendant', () => {
+  const kernel = new M01Kernel();
+  kernel.applyM07Event({ event_id: 'cascade-owner', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_OWNER', position_id: 'POS_OWNER', seq: 1 });
+  kernel.applyM13Event({ event_id: 'cascade-root', tenant_id: 'TENANT_A', type: 'agent.registered', agent_id: 'A_ROOT', owner_person_id: 'P_OWNER', scopes: ['task:execute'] });
+  kernel.applyM13Event({ event_id: 'cascade-child', tenant_id: 'TENANT_A', type: 'agent.registered', agent_id: 'A_CHILD', owner_person_id: 'P_OWNER', parent_agent_id: 'A_ROOT', scopes: ['task:execute'] });
+  kernel.applyM13Event({ event_id: 'cascade-grandchild', tenant_id: 'TENANT_A', type: 'agent.registered', agent_id: 'A_GRANDCHILD', owner_person_id: 'P_OWNER', parent_agent_id: 'A_CHILD', scopes: ['task:execute'] });
+  const result = kernel.applyM13Event({ event_id: 'cascade-revoke', tenant_id: 'TENANT_A', type: 'agent.revoked', agent_id: 'A_ROOT', owner_person_id: 'P_OWNER' });
+  assert.equal(result.ok, true);
+  for (const id of ['A_ROOT', 'A_CHILD', 'A_GRANDCHILD']) {
+    assert.equal(kernel.agents.get(id).status, 'revoked');
+    assert.equal(kernel.agents.get(id).authz_version, 2);
+    assert.ok(kernel.auditLog.some((entry) => entry.kind === 'authorization.version_changed' && entry.principal_id === id && entry.trace_id));
+  }
+});
+
+test('new persons, agents, and the master start with explicit authorization version 1', () => {
+  const kernel = new M01Kernel();
+  kernel.applyM07Event({ event_id: 'version-owner', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_OWNER', position_id: 'POS_OWNER', seq: 1 });
+  kernel.applyM13Event({ event_id: 'version-agent', tenant_id: 'TENANT_A', type: 'agent.registered', agent_id: 'A_VERSIONED', owner_person_id: 'P_OWNER', scopes: ['task:execute'] });
+  kernel.registerMaster({ tenant_id: 'TENANT_A', owner_person_id: 'P_OWNER' });
+  assert.equal(kernel.persons.get('P_OWNER').authz_version, 1);
+  assert.equal(kernel.agents.get('A_VERSIONED').authz_version, 1);
+  assert.equal(kernel.agents.get('A_MASTER_KERNEL').authz_version, 1);
+  assert.equal(kernel.status().persons.find((person) => person.person_id === 'P_OWNER').authz_version, 1);
+  assert.equal(kernel.status().agents.find((agent) => agent.agent_id === 'A_MASTER_KERNEL').authz_version, 1);
 });
 
 test('demo mode remains explicit and compatible with the legacy admin token', async (t) => {

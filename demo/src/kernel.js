@@ -70,7 +70,7 @@ export class M01Kernel {
     }
     let owner = this.persons.get(owner_person_id);
     if (!owner) {
-      owner = { person_id: owner_person_id, tenant_id, status: 'active', position_id: 'POS_OWNER', seq: 0 };
+      owner = { person_id: owner_person_id, tenant_id, status: 'active', position_id: 'POS_OWNER', seq: 0, authz_version: 1 };
       this.persons.set(owner_person_id, owner);
     }
     if (owner.tenant_id !== tenant_id) {
@@ -85,11 +85,12 @@ export class M01Kernel {
       owner_person_id,
       scopes: [...MASTER_COMMANDS],
       status: 'active',
+      authz_version: 1,
       registered_at: new Date().toISOString()
     };
     this.agents.set(MASTER_AGENT_ID, this.master);
     this._audit({ kind: 'master.registered', tenant_id, master_agent_id: MASTER_AGENT_ID, owner_person_id, scopes: this.master.scopes });
-    return { ok: true, master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', commands: this.master.scopes } };
+    return { ok: true, master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: 1, commands: this.master.scopes } };
   }
 
   dispatchCommand({ tenant_id, command, params }) {
@@ -336,6 +337,29 @@ export class M01Kernel {
     return principal.authz_version;
   }
 
+  _revokeAgentCascade(agent_id, reason, trace_id = randomUUID()) {
+    const affected = [];
+    const pending = [agent_id];
+    const visited = new Set();
+    while (pending.length) {
+      const current_id = pending.shift();
+      if (visited.has(current_id)) continue;
+      visited.add(current_id);
+      const agent = this.agents.get(current_id);
+      if (!agent) continue;
+      if (agent.status === 'active') {
+        agent.status = 'revoked';
+        this._bumpAuthorizationVersion(agent.agent_id, reason, trace_id);
+        affected.push(agent.agent_id);
+        this._audit({ kind: 'm13.agent.revoked', agent_id: agent.agent_id, reason, trace_id });
+      }
+      for (const child of this.agents.values()) {
+        if (child.parent_agent_id === current_id) pending.push(child.agent_id);
+      }
+    }
+    return affected;
+  }
+
   applyM07Event(event) {
     const event_id = event.event_id;
     if (!event_id || !event.tenant_id || !event.type || !event.person_id) {
@@ -393,14 +417,13 @@ export class M01Kernel {
       person.position_id = null;
       person.seq = seq || person.seq + 1;
       this.revocations.set(event.person_id, { reason: event.reason || 'offboarded', at: new Date().toISOString() });
+      const trace_id = randomUUID();
       for (const agent of this.agents.values()) {
         if (agent.owner_person_id === event.person_id && agent.status === 'active') {
-          agent.status = 'revoked';
-          this._bumpAuthorizationVersion(agent.agent_id, 'owner offboarded');
-          this._audit({ kind: 'm13.agent.revoked', agent_id: agent.agent_id, reason: `owner offboarded: ${event.person_id}` });
+          this._revokeAgentCascade(agent.agent_id, `owner offboarded: ${event.person_id}`, trace_id);
         }
       }
-      this._bumpAuthorizationVersion(person.person_id, 'person.offboarded');
+      this._bumpAuthorizationVersion(person.person_id, 'person.offboarded', trace_id);
       this._audit({ kind: 'm07.person.offboarded', event_id, person_id: event.person_id, agents_revoked: true });
       return { ok: true, idempotent: false, applied: true, person: this._personView(person) };
     }
@@ -455,15 +478,9 @@ export class M01Kernel {
       if (!agent) {
         return { ok: false, error: 'unknown agent_id', status: 404 };
       }
-      agent.status = 'revoked';
-      this._bumpAuthorizationVersion(agent.agent_id, 'agent revoked');
-      for (const child of this.agents.values()) {
-        if (child.parent_agent_id === event.agent_id && child.status === 'active') {
-          child.status = 'revoked';
-          this._bumpAuthorizationVersion(child.agent_id, 'agent cascade');
-        }
-      }
-      this._audit({ kind: 'm13.agent.revoked', event_id, agent_id: event.agent_id, cascaded: true });
+      const trace_id = randomUUID();
+      const affected = this._revokeAgentCascade(event.agent_id, 'agent revoked', trace_id);
+      this._audit({ kind: 'm13.agent.revoked', event_id, agent_id: event.agent_id, cascaded: affected.length > 1, trace_id });
       return { ok: true, idempotent: false, applied: true, agent: this._agentView(agent) };
     }
   }
@@ -581,9 +598,7 @@ export class M01Kernel {
       let agentsRevoked = 0;
       for (const agent of this.agents.values()) {
         if (agent.owner_person_id === principal_id && agent.status === 'active') {
-          agent.status = 'revoked';
-          this._bumpAuthorizationVersion(agent.agent_id, 'owner revoked', trace_id);
-          agentsRevoked += 1;
+          agentsRevoked += this._revokeAgentCascade(agent.agent_id, 'owner revoked', trace_id).length;
         }
       }
       this._audit({ kind: 'kernel.revocation', trace_id, principal_id, reason, agents_revoked: agentsRevoked });
@@ -591,18 +606,17 @@ export class M01Kernel {
     }
     const agent = this.agents.get(principal_id);
     if (agent) {
-      agent.status = 'revoked';
-      this._bumpAuthorizationVersion(principal_id, 'agent revoked', trace_id);
+      const agentsRevoked = this._revokeAgentCascade(principal_id, 'agent revoked', trace_id).length;
       this.revocations.set(principal_id, { reason: reason || 'manual revocation', at: new Date().toISOString() });
       this._audit({ kind: 'kernel.revocation', trace_id, principal_id, reason, agent: true });
-      return { trace_id, principal_id, revoked: true, agents_revoked: 0 };
+      return { trace_id, principal_id, revoked: true, agents_revoked: agentsRevoked };
     }
     return { ok: false, status: 404, error: 'unknown principal_id' };
   }
 
   status() {
     return {
-      master: this.master ? { agent_id: this.master.agent_id, tenant_id: this.master.tenant_id, owner_person_id: this.master.owner_person_id, status: this.agents.get(this.master.agent_id)?.status || this.master.status, commands: this.master.scopes } : null,
+      master: this.master ? { agent_id: this.master.agent_id, tenant_id: this.master.tenant_id, owner_person_id: this.master.owner_person_id, status: this.agents.get(this.master.agent_id)?.status || this.master.status, authz_version: this.master.authz_version, commands: this.master.scopes } : null,
       persons: [...this.persons.values()].map((p) => this._personView(p)),
       agents: [...this.agents.values()].map((a) => this._agentView(a)),
       events_received: this.events.size,
@@ -617,16 +631,16 @@ export class M01Kernel {
     return {
       principal_id,
       tenant_id: principal.tenant_id,
-      authz_version: principal.authz_version || 1,
+      authz_version: principal.authz_version,
       revoked: principal.status !== 'active' || this.revocations.has(principal_id)
     };
   }
 
   _personView(p) {
-    return { person_id: p.person_id, tenant_id: p.tenant_id, status: p.status, position_id: p.position_id, seq: p.seq, authz_version: p.authz_version || 1 };
+    return { person_id: p.person_id, tenant_id: p.tenant_id, status: p.status, position_id: p.position_id, seq: p.seq, authz_version: p.authz_version };
   }
 
   _agentView(a) {
-    return { agent_id: a.agent_id, tenant_id: a.tenant_id, owner_person_id: a.owner_person_id, parent_agent_id: a.parent_agent_id, scopes: a.scopes, status: a.status, authz_version: a.authz_version || 1 };
+    return { agent_id: a.agent_id, tenant_id: a.tenant_id, owner_person_id: a.owner_person_id, parent_agent_id: a.parent_agent_id, scopes: a.scopes, status: a.status, authz_version: a.authz_version };
   }
 }

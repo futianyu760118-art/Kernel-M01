@@ -28,7 +28,9 @@ function readFileLines(path) {
 }
 
 export function createApp(kernel = new M01Kernel(), config = {}) {
-  const mode = String(config.mode || process.env.M01_MODE || 'demo').toLowerCase();
+  const configuredMode = Object.prototype.hasOwnProperty.call(config, 'mode') ? config.mode : (process.env.M01_MODE ?? 'demo');
+  const mode = String(configuredMode || '').trim().toLowerCase();
+  if (mode !== 'demo' && mode !== 'oidc') throw new Error('M01_MODE must be explicitly set to demo or oidc');
   const oidcConfig = {
     ...(config.oidc || {}),
     issuer: config.oidc?.issuer || config.oidcIssuer || process.env.M01_OIDC_ISSUER,
@@ -74,6 +76,7 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     try {
       const principal = await oidcVerifier.verify(header.slice(7));
       const current = kernel.authorizationStatus(principal.principal_id);
+      if (current.ok !== false && current.revoked) return { ok: false, status: 401, error: 'principal revoked' };
       if (current.ok !== false && principal.authz_version < current.authz_version) return { ok: false, status: 401, error: 'stale authorization version' };
       if (!hasScope(principal, requiredScope)) return { ok: false, status: 403, error: 'missing required scope' };
       return { ok: true, principal };
@@ -190,7 +193,8 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
           return;
         }
         const adminRoute = pathname === '/kernel/v1/status' || pathname === '/kernel/v1/audit' || pathname === '/kernel/v1/revocations';
-        if (mode === 'oidc' && adminRoute && !hasScope(principal, adminScope)) {
+        const masterRoute = pathname.startsWith('/kernel/v1/master/');
+        if (mode === 'oidc' && (adminRoute || masterRoute) && !hasScope(principal, adminScope)) {
           send(res, 403, { error: 'missing admin scope' });
           return;
         }
@@ -317,9 +321,13 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
 
 export function start() {
   loadEnvFile(join(ROOT, '.env'));
+  const configuredMode = String(process.env.M01_MODE || '').trim().toLowerCase();
+  if (configuredMode !== 'demo' && configuredMode !== 'oidc') {
+    throw new Error('M01_MODE must be explicitly set to demo or oidc before starting M01');
+  }
   const port = Number(process.env.PORT || 3101);
   const host = process.env.HOST || '0.0.0.0';
-  const server = createApp();
+  const server = createApp(undefined, { mode: configuredMode });
   server.listen(port, host, () => {
     console.log(`[M01 DEMO] listening on http://${host}:${port} (DEMO ONLY, in-memory, do not expose)`);
   });
