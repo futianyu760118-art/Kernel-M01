@@ -1,0 +1,14 @@
+{
+  "name": "aeos-m01-kernel-mvp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AEOS M01 Kernel MVP demo (DEMO ONLY, in-memory, zero runtime dependencies)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/integration.test.js test/master-agent.test.js test/master-say.test.js"
+  }
+}
