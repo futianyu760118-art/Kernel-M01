@@ -72,7 +72,10 @@ test('OIDC verifier rejects unknown keys, invalid claims, and unsupported algori
   await assert.rejects(() => verifier.verify(token({ authz_version: '1' })), /authz_version/);
   await assert.rejects(() => verifier.verify(token({}, { kid: 'unknown-key' })), /kid/);
   const signed = token();
-  const tampered = `${signed.slice(0, -1)}${signed.endsWith('A') ? 'B' : 'A'}`;
+  const [signedHeader, signedPayload, signedSignature] = signed.split('.');
+  const signatureBytes = Buffer.from(signedSignature, 'base64url');
+  signatureBytes[0] ^= 0xff;
+  const tampered = `${signedHeader}.${signedPayload}.${signatureBytes.toString('base64url')}`;
   await assert.rejects(() => verifier.verify(tampered), /signature/);
   await assert.rejects(() => verifier.verify(token({ nbf: Math.floor(Date.now() / 1000) + 60 })), /not yet valid/);
 });
@@ -192,6 +195,10 @@ test('new persons, agents, and the master start with explicit authorization vers
   assert.equal(kernel.agents.get('A_MASTER_KERNEL').authz_version, 1);
   assert.equal(kernel.status().persons.find((person) => person.person_id === 'P_OWNER').authz_version, 1);
   assert.equal(kernel.status().agents.find((agent) => agent.agent_id === 'A_MASTER_KERNEL').authz_version, 1);
+  kernel.revoke('A_MASTER_KERNEL', 'version monotonicity');
+  const restored = kernel.registerMaster({ tenant_id: 'TENANT_A', owner_person_id: 'P_OWNER' });
+  assert.equal(restored.master.authz_version, 2);
+  assert.equal(kernel.agents.get('A_MASTER_KERNEL').authz_version, 2);
 });
 
 test('demo mode remains explicit and compatible with the legacy admin token', async (t) => {

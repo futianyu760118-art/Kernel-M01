@@ -79,18 +79,22 @@ export class M01Kernel {
     if (owner.status !== 'active') {
       return { ok: false, error: 'owner person is not active', status: 403 };
     }
+    const existingMaster = this.agents.get(MASTER_AGENT_ID);
+    const masterAuthzVersion = Number.isInteger(existingMaster?.authz_version) && existingMaster.authz_version > 0
+      ? existingMaster.authz_version
+      : 1;
     this.master = {
       agent_id: MASTER_AGENT_ID,
       tenant_id,
       owner_person_id,
       scopes: [...MASTER_COMMANDS],
       status: 'active',
-      authz_version: 1,
+      authz_version: masterAuthzVersion,
       registered_at: new Date().toISOString()
     };
     this.agents.set(MASTER_AGENT_ID, this.master);
     this._audit({ kind: 'master.registered', tenant_id, master_agent_id: MASTER_AGENT_ID, owner_person_id, scopes: this.master.scopes });
-    return { ok: true, master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: 1, commands: this.master.scopes } };
+    return { ok: true, master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: masterAuthzVersion, commands: this.master.scopes } };
   }
 
   dispatchCommand({ tenant_id, command, params }) {
