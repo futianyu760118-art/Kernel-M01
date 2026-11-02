@@ -445,9 +445,10 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
     <div class="nav-scroll">
       <div class="group">
         <h3>配置</h3>
-        <div class="field"><label>管理员 Token</label><input id="token" value="local-demo-admin" /></div>
-        <div class="field"><label>M07 Secret</label><input id="m07sec" value="local-demo-m07-secret" /></div>
-        <div class="field"><label>M13 Secret</label><input id="m13sec" value="local-demo-m13-secret" /></div>
+        <div class="field"><label>服务访问 Token（仅 DEMO）</label><input id="token" value="" autocomplete="off" placeholder="仅 DEMO 模式填写" /></div>
+        <div class="field"><label>M07 Secret（服务端调试）</label><input id="m07sec" value="" autocomplete="off" placeholder="仅本地调试填写" /></div>
+        <div class="field"><label>M13 Secret（服务端调试）</label><input id="m13sec" value="" autocomplete="off" placeholder="仅本地调试填写" /></div>
+        <button class="btn primary" data-action="loginOidc">使用企业账号登录（OIDC）<span class="hint">PKCE</span><span class="btn-spinner"></span></button>
         <div class="field"><label>人员 ID</label><input id="person" value="P_1001" /></div>
         <div class="field"><label>负责人 ID</label><input id="owner" value="P_OWNER" /></div>
         <div class="field"><label>初始岗位</label><input id="position" value="POS_STAFF" /></div>
@@ -740,7 +741,66 @@ logBox.addEventListener('click', (ev) => {
   navigator.clipboard.writeText(t.dataset.trace).then(() => toast('trace_id 已复制', 'success'));
 });
 
-const headers = () => ({ 'Authorization': 'Bearer ' + $('token').value, 'Content-Type': 'application/json' });
+const OIDC = { config: null, accessToken: null, tokenType: 'Bearer' };
+const headers = () => ({
+  'Authorization': `${OIDC.accessToken ? OIDC.tokenType + ' ' + OIDC.accessToken : 'Bearer ' + $('token').value}`,
+  'Content-Type': 'application/json'
+});
+
+function base64Url(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+function randomUrlValue(size = 32) {
+  const bytes = new Uint8Array(size);
+  crypto.getRandomValues(bytes);
+  return base64Url(bytes);
+}
+async function loadOidcConfig() {
+  if (OIDC.config) return OIDC.config;
+  const response = await fetch('/auth/oidc/config');
+  if (!response.ok) return null;
+  OIDC.config = await response.json();
+  return OIDC.config;
+}
+async function finishOidcCallback() {
+  const query = new URLSearchParams(window.location.search);
+  const code = query.get('code');
+  if (!code) return false;
+  const config = await loadOidcConfig();
+  const state = query.get('state');
+  const expectedState = sessionStorage.getItem('m01-oidc-state');
+  const verifier = sessionStorage.getItem('m01-oidc-verifier');
+  if (!config || !state || state !== expectedState || !verifier) throw new Error('OIDC 回调校验失败，请重新登录');
+  const response = await fetch(config.token_endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'authorization_code', client_id: config.client_id, code, redirect_uri: config.redirect_uri, code_verifier: verifier })
+  });
+  if (!response.ok) throw new Error('OIDC 授权码交换失败');
+  const token = await response.json();
+  if (!token.access_token) throw new Error('OIDC 未返回访问 Token');
+  OIDC.accessToken = token.access_token;
+  OIDC.tokenType = token.token_type || 'Bearer';
+  sessionStorage.removeItem('m01-oidc-state');
+  sessionStorage.removeItem('m01-oidc-verifier');
+  history.replaceState({}, document.title, window.location.pathname);
+  return true;
+}
+async function startOidcLogin() {
+  const config = await loadOidcConfig();
+  if (!config || config.mode !== 'oidc') { toast('当前服务不是正式 OIDC 模式', 'error'); return; }
+  const verifier = randomUrlValue(48);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const challenge = base64Url(new Uint8Array(digest));
+  const state = randomUrlValue(24);
+  sessionStorage.setItem('m01-oidc-state', state);
+  sessionStorage.setItem('m01-oidc-verifier', verifier);
+  const params = new URLSearchParams({ client_id: config.client_id, response_type: 'code', redirect_uri: config.redirect_uri, scope: config.scope, state, code_challenge: challenge, code_challenge_method: config.pkce });
+  window.location.assign(`${config.authorization_endpoint}?${params}`);
+}
+
 async function hmacHeader(secret, body) {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -947,6 +1007,7 @@ async function m07(type, positionId) {
 }
 
 const actions = {
+      async loginOidc() { await startOidcLogin(); },
   async saySend() {
     const v = $('sayInput').value.trim();
     if (!v) { toast('说点什么再发送', 'error'); throw new Error('empty'); }
@@ -1049,6 +1110,18 @@ document.addEventListener('click', async (ev) => {
 
 (async () => {
   const t0 = performance.now();
+  try {
+    await loadOidcConfig();
+    if (OIDC.config?.mode === 'oidc') {
+      const completed = await finishOidcCallback();
+      $('token').closest('.field').style.display = 'none';
+      $('m07sec').closest('.field').style.display = 'none';
+      $('m13sec').closest('.field').style.display = 'none';
+      if (completed) toast('企业账号登录成功', 'success');
+    }
+  } catch (error) {
+    log('OIDC', { error: String(error.message || error) }, 'DENY');
+  }
   try {
     const r = await fetch('/health');
     const d = await r.json();

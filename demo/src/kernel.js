@@ -42,6 +42,7 @@ export class M01Kernel {
     this.events = new Map();
     this.revocations = new Map();
     this.approvals = new Map();
+    this.externalIdentities = new Map();
     this.auditLog = [];
     this.master = null;
     this._seedPositions();
@@ -74,6 +75,27 @@ export class M01Kernel {
       name: 'Owner',
       capabilities: [{ resource: 'report', action: 'read' }]
     });
+  }
+
+  mapExternalIdentity({ issuer, subject, principal_id, tenant_id }) {
+    if (![issuer, subject, principal_id, tenant_id].every((value) => typeof value === 'string' && value.trim())) {
+      return { ok: false, error: 'required: issuer, subject, principal_id, tenant_id', status: 400 };
+    }
+    const key = `${issuer}\u0000${subject}`;
+    const existing = this.externalIdentities.get(key);
+    if (existing && (existing.principal_id !== principal_id || existing.tenant_id !== tenant_id)) {
+      return { ok: false, error: 'external identity is already mapped to another principal', status: 409 };
+    }
+    if (existing) return { ok: true, idempotent: true, mapping: existing };
+    const mapping = { issuer, subject, principal_id, tenant_id, status: 'active' };
+    this.externalIdentities.set(key, mapping);
+    this._audit({ kind: 'identity.external_mapped', issuer, subject, principal_id, tenant_id });
+    return { ok: true, mapping };
+  }
+
+  resolveExternalIdentity({ issuer, subject }) {
+    if (typeof issuer !== 'string' || typeof subject !== 'string') return null;
+    return this.externalIdentities.get(`${issuer}\u0000${subject}`) || null;
   }
 
   registerMaster({ tenant_id, owner_person_id, master_agent_id = MASTER_AGENT_ID, idempotency_key = null }) {
@@ -141,6 +163,7 @@ export class M01Kernel {
       events: [...this.events.entries()],
       revocations: [...this.revocations.entries()],
       approvals: [...this.approvals.entries()],
+      externalIdentities: [...this.externalIdentities.entries()],
       auditLog: this.auditLog,
       master: this.master
     });
@@ -154,6 +177,7 @@ export class M01Kernel {
     this.events = new Map(state.events);
     this.revocations = new Map(state.revocations);
     this.approvals = new Map(state.approvals);
+    this.externalIdentities = new Map(state.externalIdentities || []);
     this.auditLog = state.auditLog;
     this.master = state.master ? (this.agents.get(state.master.agent_id) || state.master) : null;
   }

@@ -38,9 +38,26 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     issuer: config.oidc?.issuer || config.oidcIssuer || process.env.M01_OIDC_ISSUER,
     audience: config.oidc?.audience || config.oidcAudience || process.env.M01_OIDC_AUDIENCE,
     jwksUri: config.oidc?.jwksUri || config.oidcJwksUri || process.env.M01_OIDC_JWKS_URI,
-    requiredScope: config.oidc?.requiredScope || config.requiredScope || process.env.M01_OIDC_REQUIRED_SCOPE
+    requiredScope: config.oidc?.requiredScope || config.requiredScope || process.env.M01_OIDC_REQUIRED_SCOPE,
+    authorizationEndpoint: config.oidc?.authorizationEndpoint || process.env.M01_OIDC_AUTHORIZATION_ENDPOINT,
+    tokenEndpoint: config.oidc?.tokenEndpoint || process.env.M01_OIDC_TOKEN_ENDPOINT,
+    clientId: config.oidc?.clientId || process.env.M01_OIDC_CLIENT_ID,
+    redirectUri: config.oidc?.redirectUri || process.env.M01_OIDC_REDIRECT_URI,
+    scopes: config.oidc?.scopes || process.env.M01_OIDC_SCOPES || 'openid profile email'
   };
   const oidcVerifier = mode === 'oidc' ? createOidcVerifier(oidcConfig) : null;
+  const oidcIssuerBase = oidcConfig.issuer ? String(oidcConfig.issuer).replace(/\/$/, '') : null;
+  const oidcPublicConfig = mode === 'oidc' ? {
+    mode,
+    issuer: oidcConfig.issuer,
+    authorization_endpoint: oidcConfig.authorizationEndpoint || (oidcIssuerBase ? `${oidcIssuerBase}/protocol/openid-connect/auth` : null),
+    token_endpoint: oidcConfig.tokenEndpoint || (oidcIssuerBase ? `${oidcIssuerBase}/protocol/openid-connect/token` : null),
+    client_id: oidcConfig.clientId || null,
+    redirect_uri: oidcConfig.redirectUri || null,
+    scope: Array.isArray(oidcConfig.scopes) ? oidcConfig.scopes.join(' ') : String(oidcConfig.scopes || 'openid profile email'),
+    pkce: 'S256'
+  } : null;
+  const requireExternalIdentityMapping = config.requireExternalIdentityMapping === true || process.env.M01_REQUIRE_EXTERNAL_IDENTITY_MAPPING === 'true';
   const requiredScope = oidcConfig.requiredScope || 'm01:policy:read';
   const adminScope = config.adminScope || oidcConfig.adminScope || process.env.M01_OIDC_ADMIN_SCOPE || 'm01:admin';
   const delegateScope = config.delegateScope || oidcConfig.delegateScope || 'm01:policy:delegate';
@@ -120,7 +137,11 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     if (!header.startsWith('Bearer ')) return { ok: false, status: 401, error: 'missing or invalid bearer token' };
     if (mode === 'demo') return checkAdmin(req) ? { ok: true, principal: null } : { ok: false, status: 401, error: 'missing or invalid service token' };
     try {
-      const principal = await oidcVerifier.verify(header.slice(7));
+      const verified = await oidcVerifier.verify(header.slice(7));
+      const mapping = kernel.resolveExternalIdentity({ issuer: oidcConfig.issuer, subject: verified.principal_id });
+      if (mapping && mapping.tenant_id !== verified.tenant_id) return { ok: false, status: 403, error: 'external identity tenant mismatch' };
+      if (requireExternalIdentityMapping && !mapping) return { ok: false, status: 403, error: 'external identity is not mapped' };
+      const principal = mapping ? { ...verified, principal_id: mapping.principal_id, tenant_id: mapping.tenant_id } : verified;
       const current = kernel.authorizationStatus(principal.principal_id);
       if (current.ok !== false && current.revoked) return { ok: false, status: 401, error: 'principal revoked' };
       if (current.ok !== false && principal.authz_version < current.authz_version) return { ok: false, status: 401, error: 'stale authorization version' };
@@ -194,6 +215,15 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     try {
       if (req.method === 'GET' && pathname === '/health') {
         send(res, 200, { status: 'ok', service: 'aeos-m01-kernel', mode, environment: mode === 'oidc' ? 'OIDC' : 'DEMO ONLY' });
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/auth/oidc/config') {
+        if (mode !== 'oidc') {
+          send(res, 404, { error: 'OIDC is disabled; set M01_MODE=oidc for formal browser login' });
+          return;
+        }
+        send(res, 200, oidcPublicConfig);
         return;
       }
 
@@ -467,12 +497,31 @@ export function start() {
   if (configuredMode === 'oidc' && !databaseUrl) {
     throw new Error('M01_DATABASE_URL must be configured in oidc formal mode');
   }
+  if (configuredMode === 'oidc') {
+    for (const name of ['M01_OIDC_ISSUER', 'M01_OIDC_AUDIENCE', 'M01_OIDC_JWKS_URI', 'M01_OIDC_CLIENT_ID', 'M01_OIDC_REDIRECT_URI']) {
+      if (!String(process.env[name] || '').trim()) throw new Error(`${name} must be configured in oidc formal mode`);
+    }
+  }
   const kernel = new M01Kernel({ allowImplicitOwner: configuredMode !== 'oidc' });
   const persistence = databaseUrl ? new PostgresStore({ connectionString: databaseUrl }) : null;
   const legacySourceDir = String(process.env.M01_EBMS_SOURCE_DIR || '').trim();
-  const server = createApp(kernel, { mode: configuredMode, persistence });
+  const server = createApp(kernel, { mode: configuredMode, persistence, requireExternalIdentityMapping: configuredMode === 'oidc' });
   server.startup = (async () => {
     await server.ready;
+    const identityBootstrap = String(process.env.M01_EXTERNAL_IDENTITIES_JSON || '').trim();
+    if (identityBootstrap) {
+      let mappings;
+      try { mappings = JSON.parse(identityBootstrap); } catch { throw new Error('M01_EXTERNAL_IDENTITIES_JSON must be valid JSON'); }
+      if (!Array.isArray(mappings)) throw new Error('M01_EXTERNAL_IDENTITIES_JSON must be an array');
+      const beforeState = persistence ? kernel.exportState() : null;
+      let changed = false;
+      for (const mapping of mappings) {
+        const result = kernel.mapExternalIdentity(mapping);
+        if (result.ok === false) throw new Error(`external identity bootstrap failed: ${result.error}`);
+        changed ||= !result.idempotent;
+      }
+      if (changed && persistence) await server.persistState(beforeState);
+    }
     if (legacySourceDir) {
       const beforeState = persistence ? kernel.exportState() : null;
       const source = loadEbmsPersonnelSourceSync(resolve(legacySourceDir));

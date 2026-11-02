@@ -38,4 +38,11 @@
 - RED: persistence server tests failed because the PostgreSQL store and readiness lifecycle did not exist.
 - GREEN: added PostgreSQL migrations/store, versioned snapshot persistence, revision conflict protection, audit deduplication, startup restore, `/readyz`, and mutation rollback on persistence failure.
 - Verification: `demo/npm test` passed 34/34; PostgreSQL store/server integration passed 5/5 with disposable PostgreSQL on `127.0.0.1:55432`.
+- Commit: `643063f feat(m01): persist kernel state in postgres`.
+
+## Task 4: complete
+
+- RED: OIDC formal contract tests failed for missing public config, missing external-identity mapping, and the DEMO-token console.
+- GREEN: added public OIDC configuration, external `issuer + sub` mapping with tenant enforcement, formal startup checks, Authorization Code + PKCE browser flow with in-memory access Token, and removed static DEMO/HMAC defaults from HTML.
+- Verification: `demo/npm test` passed 37/37, including formal OIDC contract tests.
 - Commit: pending in this task completion step.
