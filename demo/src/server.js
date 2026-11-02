@@ -69,6 +69,7 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
   };
   const adminToken = config.adminToken || process.env.M01_ADMIN_TOKEN || 'local-demo-admin';
   const demoOneClickLogin = config.demoOneClickLogin ?? String(process.env.M01_DEMO_ONE_CLICK_LOGIN || 'true').toLowerCase() === 'true';
+  const demoRequesterPersonId = config.demoRequesterPersonId || process.env.M01_DEMO_REQUESTER_PERSON_ID || 'P_DEMO_OPERATOR';
   const demoSessions = new Map();
   const m07Secret = config.m07Secret || process.env.M07_WEBHOOK_SECRET || 'local-demo-m07-secret';
   const m13Secret = config.m13Secret || process.env.M13_WEBHOOK_SECRET || 'local-demo-m13-secret';
@@ -474,14 +475,39 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
             return;
           }
           const beforeState = snapshotBeforeMutation();
+          const tenantId = mode === 'oidc' ? principal.tenant_id : body.tenant_id;
           const result = kernel.dispatchCommand({
-            tenant_id: mode === 'oidc' ? principal.tenant_id : body.tenant_id,
+            tenant_id: tenantId,
             command: selected.command,
-            params: { person_id: body.person_id, ...(selected.position_id ? { position_id: selected.position_id } : {}) }
+            params: {
+              person_id: body.person_id,
+              ...(selected.position_id ? { position_id: selected.position_id } : {}),
+              ...(body.approval_ticket ? { approval_ticket: body.approval_ticket } : {})
+            }
           });
+          let approval = null;
+          if (result.decision === 'REQUIRE_APPROVAL') {
+            approval = kernel.listApprovals(tenantId).find((item) => item.status === 'PENDING'
+              && item.resource === 'person' && item.action === 'offboard' && item.object_id === body.person_id);
+            if (!approval) {
+              const created = kernel.createApproval({
+                tenant_id: tenantId,
+                requester_id: mode === 'oidc' ? principal.principal_id : demoRequesterPersonId,
+                resource: 'master',
+                action: 'person.offboard',
+                object_id: body.person_id,
+                parameters: { person_id: body.person_id }
+              });
+              if (!created.ok) {
+                send(res, created.status || 400, { error: created.error });
+                return;
+              }
+              approval = created.approval;
+            }
+          }
           if (result.trace_id && !(await persistOr503(res, beforeState))) return;
           const message = result.decision === 'EXECUTED' ? '办理完成' : result.decision === 'REQUIRE_APPROVAL' ? '需要审批，尚未办理' : '暂时不能办理';
-          send(res, 200, { ...result, message });
+          send(res, 200, { ...result, message, ...(approval ? { approval } : {}) });
           return;
         }
         if (pathname === '/kernel/v1/capabilities') {

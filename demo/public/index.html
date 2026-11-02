@@ -187,6 +187,8 @@ aside {
 }
 .btn.danger { color: rgba(232,163,61,.85); }
 .btn.danger:hover { background: rgba(232,163,61,.1); color: var(--warn); }
+.nav-badge { margin-left:auto; min-width:18px; padding:1px 5px; border-radius:999px; background:var(--warn); color:#15110a; font-size:10px; font-weight:700; text-align:center; }
+.nav-btn.active { background:var(--side-hover); color:var(--text-1); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pop { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
@@ -423,6 +425,23 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
 .quick-process-step.waiting { color:var(--warn); border-color:rgba(232,163,61,.45); background:rgba(232,163,61,.06); }
 .quick-process-step.failed { color:var(--deny); border-color:rgba(240,86,79,.45); background:rgba(240,86,79,.06); }
 @media (max-width: 760px) { .quick-process-steps { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+.approval-card { margin-top:20px; }
+.approval-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+.approval-head h2 { margin:0; font-size:18px; }
+.approval-head .btn { width:auto; min-width:92px; justify-content:center; margin:0; }
+.approval-summary { color:var(--text-2); font-size:12px; margin-bottom:10px; }
+.approval-list { display:flex; flex-direction:column; gap:8px; }
+.approval-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:center; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg-2); }
+.approval-item-main { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.approval-item-title { color:var(--text-1); font-weight:700; font-size:13px; }
+.approval-item-meta { color:var(--text-2); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.approval-item-actions { display:flex; gap:6px; }
+.approval-item-actions .btn { width:auto; min-width:58px; justify-content:center; margin:0; }
+.approval-status { font-size:11px; font-weight:700; }
+.approval-status.pending { color:var(--warn); }
+.approval-status.approved, .approval-status.consumed { color:var(--allow); }
+.approval-status.rejected { color:var(--deny); }
+@media (max-width: 760px) { .approval-item { grid-template-columns:1fr; } .approval-item-actions { justify-content:flex-end; } }
 .quick-btn { min-height:36px; padding:8px 18px; background:var(--brand); color:#fff; border:0; border-radius:7px; font-weight:700; cursor:pointer; }
 .quick-btn:hover { background:var(--brand-strong); }
 .quick-btn:disabled { opacity:.5; cursor:not-allowed; }
@@ -493,6 +512,13 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
         <button class="btn primary" data-action="quickLogin">一键登录<span class="btn-spinner"></span></button>
         <button class="btn" data-action="quickHandle" disabled>一键办理<span class="btn-spinner"></span></button>
         <p class="form-help">登录后选择人员和事项，一次提交即可办理。</p>
+      </div>
+      <div class="group">
+        <h3>系统导航</h3>
+        <button type="button" class="btn nav-btn" data-nav-target="quickCard">办理中心</button>
+        <button type="button" class="btn nav-btn" data-nav-target="approvalCard">审批中心<span id="navApprovalCount" class="nav-badge" hidden>0</span></button>
+        <button type="button" class="btn nav-btn" data-nav-target="peopleCard">人员名单</button>
+        <button type="button" class="btn nav-btn" data-nav-target="auditCard">操作记录</button>
       </div>
       <details class="advanced-settings">
         <summary>管理员高级设置</summary>
@@ -591,6 +617,15 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
         </ol>
       </div>
     </section>
+    <section class="card approval-card" id="approvalCard" aria-labelledby="approvalTitle">
+      <div class="approval-head">
+        <h2 id="approvalTitle">审批中心</h2>
+        <button type="button" class="btn" data-action="refreshApprovals">刷新审批</button>
+      </div>
+      <p class="form-help" style="margin-left:0">需要管理员确认的办理，会显示在这里。批准后系统会继续办理并更新人员状态。</p>
+      <div id="approvalSummary" class="approval-summary">正在读取审批事项…</div>
+      <div id="approvalRows" class="approval-list"><div class="empty">暂无审批事项</div></div>
+    </section>
     <section class="card flow-card" id="flowCard" aria-labelledby="flowTitle">
       <div class="flow-head">
         <h3 id="flowTitle">系统操作流程</h3>
@@ -644,7 +679,7 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
         </ol>
       </div>
     </section>
-    <div class="card" style="margin-bottom:20px">
+    <div class="card" id="peopleCard" style="margin-bottom:20px">
       <h3>管理员指令台 · 用大白话告诉总控台要做什么</h3>
       <div class="chatwrap">
         <div class="chat-head">
@@ -700,7 +735,7 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
         </table>
       </div>
     </div>
-    <div class="card">
+    <div class="card" id="auditCard">
       <h3>智能体状态</h3>
       <div style="overflow-x:auto">
         <table>
@@ -977,6 +1012,31 @@ function renderQuickProcess(stage = 'idle') {
   title.textContent = person ? `${personLabel(person)} · ${actionName}` : '办理过程';
   progress.textContent = stateText;
   stepsBox.innerHTML = steps.map((label, index) => `<li class="quick-process-step ${states[index]}">${label}</li>`).join('');
+}
+const approvalCache = new Map();
+function approvalStatusLabel(value) {
+  return ({ PENDING: '等待审批', APPROVED: '已批准', REJECTED: '已拒绝', CONSUMED: '已完成' })[value] || '未处理';
+}
+function approvalRequesterLabel(id) {
+  return id === 'P_DEMO_OPERATOR' ? '当前操作员' : personLabelById(id);
+}
+function renderApprovals(data) {
+  const approvals = Array.isArray(data?.approvals) ? data.approvals : [];
+  const pending = approvals.filter((item) => item.status === 'PENDING');
+  approvals.forEach((item) => approvalCache.set(item.approval_id, item));
+  const count = $('navApprovalCount');
+  if (count) { count.textContent = String(pending.length); count.hidden = pending.length === 0; }
+  $('approvalSummary').textContent = pending.length ? `待审批 ${pending.length} 条，共 ${approvals.length} 条` : `暂无待审批事项，共 ${approvals.length} 条记录`;
+  if (!approvals.length) {
+    $('approvalRows').innerHTML = '<div class="empty">暂无审批事项</div>';
+    return;
+  }
+  $('approvalRows').innerHTML = approvals.slice().reverse().map((item) => {
+    const status = approvalStatusLabel(item.status);
+    const canDecide = item.status === 'PENDING';
+    const action = item.action === 'person.offboard' ? '办理离职' : commandLabel(item.action);
+    return `<div class="approval-item"><div class="approval-item-main"><span class="approval-item-title">${esc(action)} · ${esc(personLabelById(item.object_id))}</span><span class="approval-item-meta">发起人：${esc(approvalRequesterLabel(item.requester_id))}　申请时间：${esc(new Date(item.created_at).toLocaleString('zh-CN'))}</span><span class="approval-status ${String(item.status).toLowerCase()}">${esc(status)}</span></div>${canDecide ? `<div class="approval-item-actions"><button type="button" class="btn primary" data-action="approveApproval" data-approval-id="${esc(item.approval_id)}">批准</button><button type="button" class="btn danger" data-action="rejectApproval" data-approval-id="${esc(item.approval_id)}">拒绝</button></div>` : '<span class="approval-item-meta">已处理</span>'}</div>`;
+  }).join('');
 }
 const headers = () => ({
   'Authorization': `${OIDC.accessToken ? OIDC.tokenType + ' ' + OIDC.accessToken : 'Bearer ' + $('token').value}`,
@@ -1286,6 +1346,7 @@ const actions = {
           renderQuickProcess('executed');
         } else if (r.data.decision === 'REQUIRE_APPROVAL') {
           renderQuickProcess('approval');
+          await this.refreshApprovals().catch(() => {});
         } else {
           renderQuickProcess('failed');
         }
@@ -1356,6 +1417,46 @@ const actions = {
   async agentChild() { await this._m13('agent.registered', ['task:execute', 'data:export'], 'A_CHILD_1001', 'A_MAIN_1001'); },
   async agentAuthTask() { await this._auth('A_MAIN_1001', 'task', 'execute'); },
   async agentAuthExport() { await this._auth('A_MAIN_1001', 'data', 'export'); },
+  async refreshApprovals() {
+    const r = await api('GET', `/kernel/v1/approvals?tenant_id=${encodeURIComponent($('tenant').value)}`, null, headers());
+    if (!r.ok) { toast('审批列表暂时无法读取', 'error'); return; }
+    renderApprovals(r.data);
+    const pending = (r.data.approvals || []).filter((item) => item.status === 'PENDING').length;
+    setFlowState('flowApprovalState', pending ? `${pending} 条待审批` : '暂无待审批', pending ? 'review' : 'done');
+  },
+  async _decideApproval(btn, decision) {
+    const approvalId = btn.dataset.approvalId;
+    const approval = approvalCache.get(approvalId);
+    const r = await api('POST', `/kernel/v1/approvals/${encodeURIComponent(approvalId)}/decision`, {
+      tenant_id: $('tenant').value,
+      approver_id: $('owner').value,
+      decision,
+      comment: decision === 'APPROVE' ? '管理员已批准' : '管理员已拒绝'
+    }, headers());
+    if (!r.ok) { toast('审批没有处理成功，请重试', 'error'); return; }
+    if (decision === 'APPROVE' && approval?.action === 'person.offboard') {
+      const executed = await api('POST', '/kernel/v1/quick/person-action', {
+        tenant_id: $('tenant').value,
+        person_id: approval.object_id,
+        action: 'offboard',
+        approval_ticket: approvalId
+      }, headers());
+      renderDialogResult(executed.data);
+      if (executed.ok && executed.data.decision === 'EXECUTED') {
+        await this.refreshStatus();
+        renderQuickProcess('executed');
+        toast('审批已通过，人员办理已完成', 'success');
+      } else {
+        toast('审批已通过，但办理还没有完成', 'error');
+      }
+    } else if (decision === 'REJECT') {
+      renderDialogResult({ decision: 'DENY', message: '审批已拒绝，人员没有变更。' });
+      toast('审批已拒绝，人员没有变更', 'success');
+    }
+    await this.refreshApprovals();
+  },
+  async approveApproval(btn) { await this._decideApproval(btn, 'APPROVE'); },
+  async rejectApproval(btn) { await this._decideApproval(btn, 'REJECT'); },
   async refreshStatus() {
     const r = await api('GET', '/kernel/v1/status', null, headers());
     log(`系统状态 ${r.status}`, { master: r.data.master?.status || '未启用', persons: r.data.persons?.length, agents: r.data.agents?.length, events: r.data.events_received, audit: r.data.audit_entries });
@@ -1373,6 +1474,16 @@ const actions = {
 };
 
 document.addEventListener('click', async (ev) => {
+  const nav = ev.target.closest('button[data-nav-target]');
+  if (nav) {
+    const target = document.getElementById(nav.dataset.navTarget);
+    if (target) {
+      document.querySelectorAll('button[data-nav-target]').forEach((item) => item.classList.remove('active'));
+      nav.classList.add('active');
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    return;
+  }
   const btn = ev.target.closest('button[data-action]');
   if (!btn || btn.disabled) return;
   const fn = actions[btn.dataset.action];
@@ -1432,6 +1543,7 @@ document.addEventListener('click', async (ev) => {
     log('HEALTH', { error: 'unreachable' });
   }
   await actions.refreshStatus().catch(() => {});
+      await actions.refreshApprovals().catch(() => {});
   $('sayInput').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('sayInput') && document.querySelector('button[data-action="saySend"]').click(); });
   renderChips([
     { label: '启用总控智能体', prompt: '注册总控', primary: true },

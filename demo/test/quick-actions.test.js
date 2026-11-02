@@ -49,7 +49,26 @@ test('一键办理普通调岗，离职仍然必须审批', async (t) => {
   assert.equal(offboard.status, 200);
   assert.equal(offboard.data.decision, 'REQUIRE_APPROVAL');
   assert.equal(offboard.data.message, '需要审批，尚未办理');
+  assert.equal(offboard.data.approval.status, 'PENDING');
   assert.equal(kernel.persons.get('P_QUICK_1').status, 'active');
+
+  const approvals = await fetch(`${base}/kernel/v1/approvals?tenant_id=TENANT_A`, { headers: { Cookie: login.cookie } });
+  assert.equal(approvals.status, 200);
+  const approvalList = (await approvals.json()).approvals;
+  assert.equal(approvalList.length, 1);
+
+  const decided = await post(base, `/kernel/v1/approvals/${approvalList[0].approval_id}/decision`, {
+    tenant_id: 'TENANT_A', approver_id: 'P_OWNER', decision: 'APPROVE', comment: '同意办理'
+  }, login.cookie);
+  assert.equal(decided.status, 200);
+  assert.equal(decided.data.approval.status, 'APPROVED');
+
+  const executed = await post(base, '/kernel/v1/quick/person-action', {
+    tenant_id: 'TENANT_A', person_id: 'P_QUICK_1', action: 'offboard', approval_ticket: approvalList[0].approval_id
+  }, login.cookie);
+  assert.equal(executed.status, 200);
+  assert.equal(executed.data.decision, 'EXECUTED');
+  assert.equal(kernel.persons.get('P_QUICK_1').status, 'offboarded');
 });
 
 test('页面提供一键登录和一键办理入口', () => {
@@ -97,4 +116,14 @@ test('选择人员后显示办理过程和进度，并支持推进到完成', ()
   assert.match(html, /办理完成/);
   assert.match(html, /renderQuickProcess/);
   assert.match(html, /personLabel\(person\)/);
+});
+
+test('页面提供审批中心和可用的页面导航', () => {
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /审批中心/);
+  assert.match(html, /id="approvalRows"/);
+  assert.match(html, /data-nav-target="approvalCard"/);
+  assert.match(html, /data-action="refreshApprovals"/);
+  assert.match(html, /data-action="approveApproval"/);
+  assert.match(html, /data-action="rejectApproval"/);
 });
