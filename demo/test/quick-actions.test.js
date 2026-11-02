@@ -48,6 +48,7 @@ test('一键办理普通调岗，离职仍然必须审批', async (t) => {
   const offboard = await post(base, '/kernel/v1/quick/person-action', { tenant_id: 'TENANT_A', person_id: 'P_QUICK_1', action: 'offboard' }, login.cookie);
   assert.equal(offboard.status, 200);
   assert.equal(offboard.data.decision, 'REQUIRE_APPROVAL');
+  assert.equal(offboard.data.message, '需要审批，尚未办理');
   assert.equal(kernel.persons.get('P_QUICK_1').status, 'active');
 });
 
@@ -65,4 +66,23 @@ test('快速办理支持输入查找人员并显示选中人员状态', () => {
   assert.match(html, /输入姓名、编号或手机号后四位/);
   assert.match(html, /id="quickPersonStatus"/);
   assert.match(html, /statusLabel\(person\.status\)/);
+});
+
+test('对话区显示通俗的审批状态和办理结果', async (t) => {
+  const { server, kernel, base } = await startServer();
+  t.after(() => server.close());
+
+  const login = await post(base, '/auth/demo/login');
+  await post(base, '/kernel/v1/master/register', { tenant_id: 'TENANT_A', owner_person_id: 'P_OWNER' }, login.cookie);
+  const reply = kernel.say({ tenant_id: 'TENANT_A', text: '确认让 P_QUICK_1 离职' });
+  assert.equal(reply.decision, 'REQUIRE_APPROVAL');
+  assert.match(reply.content, /等待审批/);
+  assert.match(reply.content, /还没有办理/);
+  assert.doesNotMatch(reply.content, /high-risk|approval ticket|REQUIRE_APPROVAL/);
+
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="dialogApprovalStatus"/);
+  assert.match(html, /id="dialogActionResult"/);
+  assert.match(html, /审批状态/);
+  assert.match(html, /办理结果/);
 });

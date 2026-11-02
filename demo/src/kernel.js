@@ -433,52 +433,67 @@ export class M01Kernel {
     const low = raw.toLowerCase();
     const trace_id = randomUUID();
     const ex = this._extract(raw);
+    const personName = (personId) => this.persons.get(personId)?.profile?.display_name || personId;
+    const humanize = (value) => String(value || '')
+      .replace(/\bP_[A-Z0-9_]+\b/g, (personId) => personName(personId))
+      .replace(/\bA_[A-Z0-9_]+\b/g, '智能助手')
+      .replace(/\bAgent\b/gi, '智能助手')
+      .replace(/\bscope\b/gi, '工作范围')
+      .replace(/\bPOS_STAFF\b/g, '普通员工')
+      .replace(/\bPOS_MANAGER\b/g, '经理')
+      .replace(/\bPOS_OWNER\b/g, '管理员兼总经理')
+      .replace(/\bhigh-risk command needs maker-checker approval ticket; master agent cannot bypass \(fail closed\)/gi, '这类高风险操作需要管理员审批')
+      .replace(/\bapproval ticket\b/gi, '审批记录')
+      .replace(/\bmaster agent\b/gi, '总控助手')
+      .replace(/\bunknown position_id\b/gi, '岗位信息不正确')
+      .replace(/\bowner person must be active in same tenant\b/gi, '负责人必须是本单位的在职人员');
     const reply = (content, quick_actions, extra = {}) => {
-      const out = { trace_id, role: 'assistant', content, ...(quick_actions && quick_actions.length ? { quick_actions: this._qa(quick_actions) } : {}), ...extra };
-      this._audit({ kind: 'master.say', trace_id, tenant_id, text: raw.slice(0, 200), reply: content.slice(0, 200) });
+      const plainContent = humanize(content);
+      const out = { trace_id, role: 'assistant', content: plainContent, ...(quick_actions && quick_actions.length ? { quick_actions: this._qa(quick_actions) } : {}), ...extra };
+      this._audit({ kind: 'master.say', trace_id, tenant_id, text: raw.slice(0, 200), reply: plainContent.slice(0, 200) });
       return out;
     };
-    const needRegister = () => reply('总控 Agent 还没注册，无法执行指令。要先注册吗（绑定负责人 P_OWNER）？', [
+    const needRegister = () => reply('总控助手还没有启用，暂时不能办理。要先启用吗？', [
       { label: '注册总控', prompt: '注册总控', primary: true }
     ]);
     const run = (command, params, okPhrase) => {
       if (!this.master) return needRegister();
       const d = this.dispatchCommand({ tenant_id, command, params });
-      if (d.ok === false) return reply(`✗ 指令格式有问题：${d.error}`, []);
-      if (d.decision === 'EXECUTED') return reply(`✓ ${okPhrase || '已完成'}：${command}${d.trace_id ? `（trace ${d.trace_id.slice(0, 8)}）` : ''}`, d.output != null ? undefined : [], { decision: d.decision, command, trace_id: d.trace_id, output: d.output });
-      if (d.decision === 'REQUIRE_APPROVAL') return reply(`△ 这个操作我不能直接执行：${d.reason}。你可以先查看当前状态，或者保持等待审批票据。`, [
+      if (d.ok === false) return reply(`这次办理没有成功：${d.error}`, []);
+      if (d.decision === 'EXECUTED') return reply(`已办好：${okPhrase || '操作已完成'}。办理结果：已完成。`, d.output != null ? undefined : [], { decision: d.decision, command, trace_id: d.trace_id, output: d.output });
+      if (d.decision === 'REQUIRE_APPROVAL') return reply('这项操作需要管理员审批。审批状态：等待审批。办理结果：还没有办理。', [
         { label: '查看系统状态', prompt: '看看系统状态', primary: true },
-        { label: '查他的能力', prompt: `查一下 ${params.person_id || params.principal_id || params.agent_id || 'P_1001'} 的能力` }
+        { label: '先不办理', prompt: '取消' }
       ], { decision: d.decision, command, trace_id: d.trace_id });
-      return reply(`✗ 无法执行：${d.reason}`, [{ label: '查看系统状态', prompt: '看看系统状态', primary: true }], { decision: d.decision, command, trace_id: d.trace_id });
+      return reply(`这次办理没有完成。办理结果：未办理。${d.reason ? `原因：${d.reason}。` : ''}`, [{ label: '查看系统状态', prompt: '看看系统状态', primary: true }], { decision: d.decision, command, trace_id: d.trace_id });
     };
 
     if (/^注册总控|注册.{0,4}总控/.test(raw)) {
       const r = this.registerMaster({ tenant_id, owner_person_id: ex.person || 'P_OWNER' });
       if (r.ok === false) return reply(`注册失败：${r.error}`, []);
-      return reply(`✓ 总控 Agent 已注册并在线，负责人 ${r.master.owner_person_id}。用大白话告诉我要做什么就行。`, [
-        { label: '来个人入职', prompt: `让 ${ex.person || 'P_1001'} 入职，岗位 POS_STAFF`, primary: true },
+      return reply('总控助手已启用并在线。接下来直接用大白话告诉我需要办理什么就行。', [
+        { label: '办理入职', prompt: `让 ${ex.person || 'P_1001'} 入职，岗位 POS_STAFF`, primary: true },
         { label: '看看状态', prompt: '看看系统状态' },
-        { label: '查能力', prompt: `查一下 ${ex.person || 'P_1001'} 的能力` }
+        { label: '查看权限', prompt: `查一下 ${ex.person || 'P_1001'} 的能力` }
       ], { decision: 'EXECUTED', command: 'master.register', registration: r });
     }
     if (/^(你好|hi|hello|在吗|帮帮忙|帮助|help|能做什么|你会什么|你能干什么)/.test(low)) {
-      return reply('你好，负责人。我是总控 Agent，替你统管这个系统：人员入转调离、子 Agent 注册撤销、能力查询、判权、撤权和状态审计都能办。直接说事就行。', [
-        { label: '让 P_1001 入职', prompt: '让 P_1001 入职，岗位 POS_STAFF', primary: true },
+      return reply('你好，我是总控助手，可以帮你办理人员入职、调岗、离职，也可以查看权限和系统状态。直接说要办什么就行。', [
+        { label: '办理入职', prompt: '让 P_1001 入职，岗位 POS_STAFF', primary: true },
         { label: '系统什么状态', prompt: '看看系统状态' },
-        { label: 'P_1001 有什么权限', prompt: '查一下 P_1001 的能力' }
+        { label: '查看权限', prompt: '查一下 P_1001 的能力' }
       ]);
     }
     if (/取消|算了|不用了/.test(raw)) return reply('好的，本次操作已取消。');
 
     if (/离职|辞退|开除/.test(raw)) {
       const p = ex.person;
-      if (!p) return reply('要给谁办离职？', [
-        { label: 'P_1001', prompt: '让 P_1001 离职', primary: true },
+      if (!p) return reply('请告诉我哪位员工要办理离职。', [
+        { label: '先不办理', prompt: '取消', primary: true },
         { label: '算了', prompt: '取消' }
       ]);
-      if (/确认/.test(raw)) return run('person.offboard', { person_id: p }, `已按流程尝试为 ${p} 办离职（高风险，等待审批）`);
-      return reply(`${p} 的离职属于高风险操作（会撤销其本人和名下全部 Agent 的权限）。确认要继续吗？继续也会因无审批票据被安全拦截。`, [
+      if (/确认/.test(raw)) return run('person.offboard', { person_id: p }, `已提交${personName(p)}的离职办理`);
+      return reply(`${personName(p)}的离职需要管理员审批，审批通过后才会办理，并会收回本人及名下智能助手的权限。确认继续吗？`, [
         { label: '确认执行', prompt: `确认让 ${p} 离职`, primary: true },
         { label: '先看他的权限', prompt: `查一下 ${p} 的能力` },
         { label: '取消', prompt: '取消' }
@@ -493,13 +508,11 @@ export class M01Kernel {
         ]);
       }
       const p = ex.person;
-      if (!p) return reply('要撤销谁的身份/Agent？说人员 ID（P_ 开头）或 Agent ID（A_ 开头）。', [
-        { label: '撤 P_1001', prompt: '撤销 P_1001', primary: true },
-        { label: '撤主 Agent', prompt: '撤销 Agent A_MAIN_1001' },
-        { label: '取消', prompt: '取消' }
+      if (!p) return reply('请告诉我哪位员工要停用，或者哪位智能助手要撤销。', [
+        { label: '取消', prompt: '取消', primary: true }
       ]);
       if (/确认/.test(raw)) return run('principal.revoke', { principal_id: p }, `已按流程尝试撤权 ${p}`);
-      return reply(`撤销 ${p} 的全部权限是高风险操作。确认继续？`, [
+      return reply(`撤销${personName(p)}的全部权限是高风险操作，需要管理员审批。确认继续？`, [
         { label: '确认执行', prompt: `确认撤销 ${p}`, primary: true },
         { label: '先看权限', prompt: `查一下 ${p} 的能力` },
         { label: '取消', prompt: '取消' }
@@ -508,7 +521,7 @@ export class M01Kernel {
     if (/入职|新员工|招聘|招了|聘用|录用/.test(raw)) {
       const p = ex.person || 'P_1001';
       const pos = ex.position;
-      if (!pos) return reply(`好的，让 ${p} 入职。安排到哪个岗位？`, [
+      if (!pos) return reply(`好的，${personName(p)}要入职。安排到哪个岗位？`, [
         { label: '普通员工', prompt: `让 ${p} 入职，岗位 POS_STAFF`, primary: true },
         { label: '经理', prompt: `让 ${p} 入职，岗位 POS_MANAGER` },
         { label: '算了', prompt: '取消' }
@@ -518,7 +531,7 @@ export class M01Kernel {
     if (/调岗|转岗|调到|换成|晋升/.test(raw)) {
       const p = ex.person || 'P_1001';
       const pos = ex.position;
-      if (!pos) return reply(`${p} 调到哪个岗位？`, [
+      if (!pos) return reply(`${personName(p)}要调到哪个岗位？`, [
         { label: '经理', prompt: `把 ${p} 调到经理岗`, primary: true },
         { label: '普通员工', prompt: `把 ${p} 调到员工岗` },
         { label: '取消', prompt: '取消' }
@@ -529,9 +542,9 @@ export class M01Kernel {
       const a = ex.agent || 'A_CHILD_1001';
       const owner = ex.person || 'P_1001';
       const sc = ex.scope;
-      if (!sc) return reply(`好，给 ${owner} 注册子 Agent ${a}。授什么权限范围（scope）？`, [
-        { label: 'task:execute', prompt: `注册子 Agent ${a}，归属 ${owner}，scope task:execute`, primary: true },
-        { label: 'report:read', prompt: `注册子 Agent ${a}，归属 ${owner}，scope report:read` },
+      if (!sc) return reply(`好的，要给${personName(owner)}添加智能助手。它主要负责哪类工作？`, [
+        { label: '办理日常任务', prompt: `注册子 Agent ${a}，归属 ${owner}，scope task:execute`, primary: true },
+        { label: '查看报表', prompt: `注册子 Agent ${a}，归属 ${owner}，scope report:read` },
         { label: '取消', prompt: '取消' }
       ]);
       return run('agent.register', { agent_id: a, owner_person_id: owner, scopes: [sc] }, `子 Agent ${a} 已注册`);
@@ -543,9 +556,9 @@ export class M01Kernel {
     if (/判权|能不能|允不允许|允许吗|可以吗/.test(raw)) {
       const p = ex.person || ex.agent || 'P_1001';
       const sc = ex.scope;
-      if (!sc) return reply(`要判断 ${p} 对哪个动作的权限？格式 资源:动作。`, [
-        { label: 'task:execute', prompt: `判断 ${p} 能不能 task:execute`, primary: true },
-        { label: 'data:export', prompt: `判断 ${p} 能不能 data:export` },
+      if (!sc) return reply(`要判断${personName(p)}能不能办理哪项工作？`, [
+        { label: '办理日常任务', prompt: `判断 ${p} 能不能 task:execute`, primary: true },
+        { label: '导出数据', prompt: `判断 ${p} 能不能 data:export` },
         { label: '取消', prompt: '取消' }
       ]);
       const [resource, action] = sc.split(':');
@@ -554,7 +567,7 @@ export class M01Kernel {
     if (/状态|概况|怎么样|多少人|多少个|运行/.test(raw)) return run('system.status', {}, '系统状态如下');
     if (/审计|日志|记录|操作记录/.test(raw)) return run('audit.tail', { limit: 10 }, '最近审计记录如下');
 
-    return reply('这个我还不会办。我目前能做：人员入转调离、子 Agent 注册撤销、能力查询、判权、撤权、状态与审计。想办哪件？', [
+    return reply('这件事我暂时不会办。我可以帮你办理人员入职、调岗、离职，添加或撤销智能助手，查看权限和系统状态。想办哪件？', [
       { label: '来个人入职', prompt: '让 P_1001 入职，岗位 POS_STAFF', primary: true },
       { label: '看看系统状态', prompt: '看看系统状态' },
       { label: '查权限', prompt: '查一下 P_1001 的能力' }

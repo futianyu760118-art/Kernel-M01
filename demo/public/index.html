@@ -293,6 +293,15 @@ aside {
 .msg pre { white-space: pre-wrap; word-break: break-all; margin-top: var(--sp-1); color: var(--text-3); font-size: 11px; max-height: 110px; overflow: auto; }
 .msg .trace { color: var(--info); cursor: pointer; }
 .msg .trace:hover { text-decoration: underline; }
+.dialog-result { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:var(--sp-2); padding:10px 12px; border:1px solid var(--line-strong); border-radius:8px; background:var(--bg-2); }
+.dialog-result[hidden] { display:none; }
+.dialog-result-item { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.dialog-result-label { color:var(--text-3); font-size:11px; }
+.dialog-result-value { color:var(--text-1); font-size:13px; font-weight:700; }
+.dialog-result-value.waiting { color:var(--warn); }
+.dialog-result-value.done { color:var(--allow); }
+.dialog-result-value.failed { color:var(--deny); }
+.dialog-result-hint { grid-column:1/-1; margin:0; color:var(--text-2); font-size:11px; line-height:1.45; }
 .sysmsg { align-self: center; color: var(--text-3); font-size: 11.5px; margin: var(--sp-1) 0; }
 .typing {
   align-self: flex-start; display: inline-flex; gap: 4px;
@@ -626,8 +635,13 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
           <div class="sysmsg">可以直接说：启用总控、查看系统状态、查看朱剑军的权限。</div>
           <div class="typing" id="typing" hidden aria-label="总控智能体正在处理"><i></i><i></i><i></i></div>
         </div>
+        <div id="dialogResult" class="dialog-result" hidden aria-live="polite">
+          <div class="dialog-result-item"><span class="dialog-result-label">审批状态</span><strong id="dialogApprovalStatus" class="dialog-result-value">—</strong></div>
+          <div class="dialog-result-item"><span class="dialog-result-label">办理结果</span><strong id="dialogActionResult" class="dialog-result-value">—</strong></div>
+          <p id="dialogResultHint" class="dialog-result-hint"></p>
+        </div>
         <div class="chat-input">
-          <input id="sayInput" placeholder="例如：看看系统状态" aria-label="用大白话下达指令" autocomplete="off" />
+          <input id="sayInput" placeholder="例如：帮朱剑军调到经理岗位" aria-label="用大白话下达指令" autocomplete="off" />
           <button class="btn send" data-action="saySend" style="width:auto;min-width:96px;margin:0"><span class="btn-label">发送</span><span class="btn-spinner"></span></button>
         </div>
       </div>
@@ -788,6 +802,33 @@ function toast(msg, kind = '') {
   setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 350); }, 2500);
 }
 
+function renderDialogResult(d) {
+  const box = $('dialogResult');
+  if (!box || !d) return;
+  const approval = $('dialogApprovalStatus');
+  const result = $('dialogActionResult');
+  const hint = $('dialogResultHint');
+  const approvalText = !d.decision ? '未提交'
+    : d.decision === 'REQUIRE_APPROVAL' ? '等待审批'
+    : d.decision === 'EXECUTED' ? '不需要审批'
+      : d.decision === 'ALLOW' ? '已通过' : '未通过';
+  const resultText = !d.decision ? '等待补充信息'
+    : d.decision === 'EXECUTED' ? '已完成'
+    : d.decision === 'REQUIRE_APPROVAL' ? '尚未办理'
+      : d.decision === 'ALLOW' ? '可以办理' : '未办理';
+  const stateClass = !d.decision || d.decision === 'REQUIRE_APPROVAL' ? 'waiting'
+    : d.decision === 'EXECUTED' || d.decision === 'ALLOW' ? 'done'
+    : d.decision === 'REQUIRE_APPROVAL' ? 'waiting' : 'failed';
+  approval.textContent = approvalText;
+  approval.className = `dialog-result-value ${stateClass}`;
+  result.textContent = resultText;
+  result.className = `dialog-result-value ${stateClass}`;
+  hint.textContent = d.decision === 'REQUIRE_APPROVAL'
+    ? '这次只提交了办理申请，人员状态没有改变，审批通过后才能继续。'
+    : d.message || d.content || (d.decision === 'EXECUTED' ? '办理已经完成。' : '这次没有完成办理。');
+  box.hidden = false;
+}
+
 function log(tag, obj, cls = '') {
   const e = document.createElement('div');
   e.className = 'entry ' + cls;
@@ -813,6 +854,24 @@ let quickLoggedIn = false;
 function tenantLabel(id) { return HUMAN_TENANTS[id] || id || '未填写单位'; }
 function positionLabel(id) { return HUMAN_POSITIONS[id] || id || '未分配岗位'; }
 function statusLabel(value) { return HUMAN_STATUS[value] || value || '未知'; }
+function decisionLabel(value) {
+  return ({ EXECUTED: '已完成', REQUIRE_APPROVAL: '等待审批', DENY: '未办理', ALLOW: '允许办理' })[value] || value || '未处理';
+}
+function commandLabel(value) {
+  return ({
+    'master.register': '启用总控助手',
+    'person.hire': '办理入职',
+    'person.transfer': '办理调岗',
+    'person.offboard': '办理离职',
+    'agent.register': '添加智能助手',
+    'agent.revoke': '撤销智能助手',
+    'principal.revoke': '停用人员权限',
+    'capabilities.query': '查看权限',
+    'authorize.check': '检查能否办理',
+    'system.status': '查看系统状态',
+    'audit.tail': '查看操作记录'
+  })[value] || '办理事项';
+}
 function personLabel(person) {
   const name = person?.profile?.display_name || person?.display_name || '未填写姓名';
   return `${name}（编号 ${person?.person_id || '无编号'}）`;
@@ -994,7 +1053,7 @@ function renderChips(actions) {
   const wrap = document.createElement('div');
   wrap.className = 'qa';
   wrap.innerHTML = actions.map((a, i) =>
-    `<button type="button" class="${a.primary ? 'primary' : ''}" data-prompt="${esc(a.prompt)}" title="将发送：${esc(a.prompt)}">${esc(a.label)}</button>`).join('');
+    `<button type="button" class="${a.primary ? 'primary' : ''}" data-prompt="${esc(a.prompt)}" title="点击继续">${esc(a.label)}</button>`).join('');
   chatBox.insertBefore(wrap, typingEl);
   chatScroll();
 }
@@ -1016,7 +1075,8 @@ async function sayText(text) {
     r = await api('POST', '/kernel/v1/master/say', { tenant_id: $('tenant').value, text }, headers());
   } catch {
     typing(false);
-    agentMsg('✗ 通道异常，指令未送达', 'DENY');
+    renderDialogResult({ decision: 'DENY', content: '暂时没有连上系统，请稍后再试。' });
+    agentMsg('暂时没有连上系统，请稍后再试。', 'DENY');
     chatBusy = false;
     return;
   }
@@ -1024,13 +1084,14 @@ async function sayText(text) {
   typing(false);
   log(`SAY ${r.status} · ${ms}ms`, r.data, r.data.decision || '');
   if (!r.ok) {
-    agentMsg(`✗ 通道异常：HTTP ${r.status}`, 'DENY');
+    renderDialogResult({ decision: 'DENY', content: '这次没有办理成功，请稍后重试。' });
+    agentMsg('这次没有办理成功，请稍后重试。', 'DENY');
     chatBusy = false;
     return;
   }
   const d = r.data;
-  const trace = d.trace_id ? ` <span class="trace" data-trace="${d.trace_id}" title="点击复制">[${d.trace_id.slice(0, 8)}]</span>` : '';
-  agentMsg(`${esc(d.content)}${trace}${d.output != null ? `<pre>${esc(JSON.stringify(d.output, null, 1))}</pre>` : ''}`, d.decision || '');
+  renderDialogResult(d);
+  agentMsg(esc(d.content || '已收到，我正在处理。'), d.decision || '');
   renderChips(d.quick_actions);
   if (d.decision && d.command) {
     pushHistory({ command: d.command, decision: d.decision, trace_id: d.trace_id, reason: d.content }, {});
@@ -1042,7 +1103,7 @@ async function sayText(text) {
 
 function renderDecision(d) {
   const v = $('verdict');
-  v.textContent = d.decision || '—';
+  v.textContent = decisionLabel(d.decision);
   v.className = 'verdict ' + (d.decision || 'idle');
   $('vPrincipal').textContent = d.principal_id || '-';
   $('vAction').textContent = d.resource ? `${d.resource}:${d.action}` : '-';
@@ -1112,7 +1173,7 @@ function pushHistory(r, params) {
 function renderHistory() {
   $('histCount').textContent = `(${history.length})`;
   $('hist').innerHTML = history.length ? history.map((h, i) =>
-    `<li data-i="${i}" title="点击回填输入框"><span class="t">${h.time}</span><span class="chip ${h.decision}">${h.decision}</span><span class="hcmd">${h.command}</span><span class="hwhy">${esc(h.reason)}</span></li>`).join('')
+    `<li data-i="${i}" title="点击回填输入框"><span class="t">${h.time}</span><span class="chip ${h.decision}">${decisionLabel(h.decision)}</span><span class="hcmd">${commandLabel(h.command)}</span><span class="hwhy">${esc(h.reason)}</span></li>`).join('')
     : '<li class="empty">本会话暂无指令</li>';
 }
 $('hist').addEventListener('click', (ev) => {
@@ -1163,7 +1224,8 @@ const actions = {
           action
         }, headers());
         log('一键办理', r.data, r.data.decision || '');
-        if (!r.ok) { toast(r.data.error || '暂时不能办理', 'error'); return; }
+        renderDialogResult(r.data);
+        if (!r.ok) { toast('这次没有办理成功，请稍后重试', 'error'); return; }
         toast(r.data.message || '办理完成', r.data.decision === 'EXECUTED' ? 'success' : 'error');
         if (r.data.decision === 'EXECUTED') await this.refreshStatus();
       },

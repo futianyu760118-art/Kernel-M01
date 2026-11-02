@@ -72,7 +72,7 @@ test('say: destructive offboard asks confirmation, then fail-closed REQUIRE_APPR
 
   const r1 = await say(base, '让 P_7002 离职');
   assert.ok(!r1.data.decision);
-  assert.ok(r1.data.content.includes('高风险'));
+  assert.ok(r1.data.content.includes('需要管理员审批'));
   assert.ok(r1.data.quick_actions.some((a) => /确认/.test(a.label)));
 
   const r2 = await say(base, '确认让 P_7002 离职');
@@ -100,6 +100,6 @@ test('say: greetings, status and unknown intents follow quick_actions contract',
 
   const unknown = await say(base, '帮我订一杯咖啡');
   assert.ok(!unknown.data.decision);
-  assert.ok(unknown.data.content.includes('还不会'));
+  assert.ok(unknown.data.content.includes('暂时不会办'));
   assert.ok(unknown.data.quick_actions.length <= 3 && onePrimary(unknown.data.quick_actions));
 });

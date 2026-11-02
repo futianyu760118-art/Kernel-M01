@@ -480,7 +480,7 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
             params: { person_id: body.person_id, ...(selected.position_id ? { position_id: selected.position_id } : {}) }
           });
           if (result.trace_id && !(await persistOr503(res, beforeState))) return;
-          const message = result.decision === 'EXECUTED' ? '办理完成' : result.decision === 'REQUIRE_APPROVAL' ? '已进入审批' : '暂时不能办理';
+          const message = result.decision === 'EXECUTED' ? '办理完成' : result.decision === 'REQUIRE_APPROVAL' ? '需要审批，尚未办理' : '暂时不能办理';
           send(res, 200, { ...result, message });
           return;
         }
