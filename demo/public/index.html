@@ -142,6 +142,12 @@ aside {
 .field { margin-bottom: var(--sp-2); padding: 0 var(--sp-2); }
 .field label { display: block; font-size: 11.5px; color: var(--side-label); margin-bottom: 2px; }
 .form-help { margin: -2px var(--sp-2) 10px; color: var(--side-label); font-size: 11px; line-height: 1.5; }
+.advanced-settings { margin: 0 -4px; }
+.advanced-settings > summary { cursor: pointer; list-style: none; color: var(--side-muted); font-size: 11px; padding: 6px 8px; border-top: 1px solid var(--side-line-soft); border-bottom: 1px solid var(--side-line-soft); }
+.advanced-settings > summary::-webkit-details-marker { display: none; }
+.advanced-settings > summary::before { content: '＋'; margin-right: 5px; }
+.advanced-settings[open] > summary::before { content: '－'; }
+.advanced-settings[open] > summary { color: var(--text-1); }
 .field input {
   width: 100%; padding: 6px 9px; font-size: 12px; color: var(--text-1);
   background: var(--side-input); border: 1px solid var(--side-line-soft); border-radius: 6px;
@@ -385,6 +391,20 @@ td { color: var(--text-2); }
 td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace; }
 .subtext { display:block; color:var(--text-3); font-size:10px; margin-top:2px; font-family:inherit; }
 
+.quick-card { border-color: var(--brand-veil-strong); background: linear-gradient(135deg, var(--bg-1), var(--brand-veil)); }
+.quick-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:16px; }
+.quick-head h2 { font-size:20px; margin-bottom:4px; }
+.quick-head p { color:var(--text-2); font-size:12px; }
+.quick-login-state { color:var(--warn); font-size:12px; white-space:nowrap; }
+.quick-login-state.ok { color:var(--allow); }
+.quick-grid { display:grid; grid-template-columns: minmax(180px,1fr) minmax(180px,1fr) auto; gap:12px; align-items:end; }
+.quick-field label { display:block; color:var(--text-3); font-size:11px; margin-bottom:4px; }
+.quick-field select { width:100%; padding:8px 10px; color:var(--text-1); background:var(--bg-2); border:1px solid var(--line-strong); border-radius:6px; }
+.quick-btn { min-height:36px; padding:8px 18px; background:var(--brand); color:#fff; border:0; border-radius:7px; font-weight:700; cursor:pointer; }
+.quick-btn:hover { background:var(--brand-strong); }
+.quick-btn:disabled { opacity:.5; cursor:not-allowed; }
+@media (max-width: 760px) { .quick-grid { grid-template-columns:1fr; } }
+
 #log { height: 320px; overflow-y: auto; font: 12px/1.7 "Cascadia Code", Consolas, monospace; }
 .entry {
   padding: 6px 10px; border-left: 3px solid var(--line-strong); margin-bottom: 4px;
@@ -446,6 +466,14 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
   <aside>
     <div class="nav-scroll">
       <div class="group">
+        <h3>快捷操作</h3>
+        <button class="btn primary" data-action="quickLogin">一键登录<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="quickHandle" disabled>一键办理<span class="btn-spinner"></span></button>
+        <p class="form-help">登录后选择人员和事项，一次提交即可办理。</p>
+      </div>
+      <details class="advanced-settings">
+        <summary>管理员高级设置</summary>
+      <div class="group">
         <h3>配置</h3>
         <div class="field"><label>演示访问密码（仅演示环境）</label><input id="token" value="" autocomplete="off" placeholder="请输入演示访问密码" /></div>
         <p class="form-help">正式环境请点击“使用企业账号登录”；演示环境请填写管理员提供的访问密码。</p>
@@ -495,6 +523,7 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
         <button class="btn" data-action="refreshAudit">查看操作记录<span class="btn-spinner"></span></button>
         <button class="btn" data-action="clearLog">清空日志<span class="btn-spinner"></span></button>
       </div>
+      </details>
     </div>
     <div class="side-anchor" id="anchor">
       <div class="row"><span class="k">管理员</span><span class="v" id="aOwner">朱剑军</span></div>
@@ -504,6 +533,30 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
   </aside>
 
   <main id="main">
+    <section class="card quick-card" id="quickCard" aria-labelledby="quickTitle">
+      <div class="quick-head">
+        <div>
+          <h2 id="quickTitle">快速办理</h2>
+          <p>恒剑光电日常操作只需要登录、选择人员、点击办理。</p>
+        </div>
+        <span id="quickLoginState" class="quick-login-state">尚未登录</span>
+      </div>
+      <div class="quick-grid">
+        <div class="quick-field">
+          <label for="quickPerson">选择人员</label>
+          <select id="quickPerson" disabled><option>请先一键登录</option></select>
+        </div>
+        <div class="quick-field">
+          <label for="quickAction">要办理的事项</label>
+          <select id="quickAction" disabled>
+            <option value="hire">办理入职（普通员工）</option>
+            <option value="transfer_manager">调整到经理岗位</option>
+            <option value="offboard">办理离职（需要审批）</option>
+          </select>
+        </div>
+        <button class="quick-btn" data-action="quickHandle" disabled>一键办理</button>
+      </div>
+    </section>
     <section class="card flow-card" id="flowCard" aria-labelledby="flowTitle">
       <div class="flow-head">
         <h3 id="flowTitle">系统操作流程</h3>
@@ -751,6 +804,7 @@ const HUMAN_TENANTS = { TENANT_A: '恒剑光电' };
 const HUMAN_POSITIONS = { POS_STAFF: '普通员工', POS_MANAGER: '经理', POS_OWNER: '管理员兼总经理' };
 const HUMAN_STATUS = { active: '正常', pending: '待确认', offboarded: '已离职', revoked: '已撤销', inactive: '未启用', enabled: '正常' };
 let currentPeople = [];
+let quickLoggedIn = false;
 function tenantLabel(id) { return HUMAN_TENANTS[id] || id || '未填写单位'; }
 function positionLabel(id) { return HUMAN_POSITIONS[id] || id || '未分配岗位'; }
 function statusLabel(value) { return HUMAN_STATUS[value] || value || '未知'; }
@@ -761,6 +815,32 @@ function personLabel(person) {
 function personLabelById(id) {
   const person = currentPeople.find((item) => item.person_id === id);
   return person ? personLabel(person) : (id || '未填写');
+}
+function setQuickLoggedIn(value) {
+  quickLoggedIn = value;
+  const state = $('quickLoginState');
+  if (state) {
+    state.textContent = value ? '已登录：朱剑军' : '尚未登录';
+    state.className = 'quick-login-state' + (value ? ' ok' : '');
+  }
+  document.querySelectorAll('[data-action="quickHandle"]').forEach((button) => { button.disabled = !value; });
+  if ($('quickPerson')) $('quickPerson').disabled = !value;
+  if ($('quickAction')) $('quickAction').disabled = !value;
+}
+function renderQuickPeople(people) {
+  const select = $('quickPerson');
+  if (!select) return;
+  if (!people.length) {
+    select.innerHTML = '<option>暂无可办理人员</option>';
+    return;
+  }
+  const current = select.value;
+  select.innerHTML = people.map((person) => `<option value="${esc(person.person_id)}">${esc(personLabel(person))} · ${esc(positionLabel(person.position_id))}</option>`).join('');
+  const preferred = people.find((person) => person.person_id === current)
+    || people.find((person) => person.person_id !== $('owner').value && person.status !== 'active')
+    || people.find((person) => person.person_id !== $('owner').value)
+    || people[0];
+  select.value = preferred.person_id;
 }
 const headers = () => ({
   'Authorization': `${OIDC.accessToken ? OIDC.tokenType + ' ' + OIDC.accessToken : 'Bearer ' + $('token').value}`,
@@ -959,6 +1039,8 @@ function renderCaps(d) {
 
 function renderStatus(d) {
   currentPeople = Array.isArray(d.persons) ? d.persons : [];
+  renderQuickPeople(currentPeople);
+  if (!quickLoggedIn && d.master) setQuickLoggedIn(true);
   setMasterUI(d.master);
   $('aTenant').textContent = d.organization?.name || tenantLabel(d.master?.tenant_id || $('tenant').value);
   const people = currentPeople;
@@ -1028,6 +1110,33 @@ async function m07(type, positionId) {
 }
 
 const actions = {
+      async quickLogin() {
+        if (OIDC.config?.mode === 'oidc') {
+          await startOidcLogin();
+          return;
+        }
+        const response = await fetch('/auth/demo/login', { method: 'POST', credentials: 'same-origin' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || '登录失败');
+        setQuickLoggedIn(true);
+        await this.masterRegister();
+        toast('已登录，可以直接办理人员事项', 'success');
+      },
+      async quickHandle() {
+        if (!quickLoggedIn) { toast('请先点击一键登录', 'error'); throw new Error('not logged in'); }
+        const personId = $('quickPerson').value;
+        const action = $('quickAction').value;
+        if (!personId) { toast('请先选择人员', 'error'); throw new Error('no person'); }
+        const r = await api('POST', '/kernel/v1/quick/person-action', {
+          tenant_id: $('tenant').value,
+          person_id: personId,
+          action
+        }, headers());
+        log('一键办理', r.data, r.data.decision || '');
+        if (!r.ok) { toast(r.data.error || '暂时不能办理', 'error'); return; }
+        toast(r.data.message || '办理完成', r.data.decision === 'EXECUTED' ? 'success' : 'error');
+        if (r.data.decision === 'EXECUTED') await this.refreshStatus();
+      },
       async loginOidc() { await startOidcLogin(); },
   async saySend() {
     const v = $('sayInput').value.trim();
@@ -1097,7 +1206,7 @@ const actions = {
   async refreshStatus() {
     const r = await api('GET', '/kernel/v1/status', null, headers());
     log(`系统状态 ${r.status}`, { master: r.data.master?.status || '未启用', persons: r.data.persons?.length, agents: r.data.agents?.length, events: r.data.events_received, audit: r.data.audit_entries });
-    if (r.ok) renderStatus(r.data);
+        if (r.ok) { setQuickLoggedIn(true); renderStatus(r.data); }
   },
   async refreshAudit() {
     const r = await api('GET', '/kernel/v1/audit', null, headers());
@@ -1140,7 +1249,10 @@ document.addEventListener('click', async (ev) => {
       $('token').closest('.field').style.display = 'none';
       $('m07sec').closest('.field').style.display = 'none';
       $('m13sec').closest('.field').style.display = 'none';
-      if (completed) toast('企业账号登录成功', 'success');
+      if (completed) {
+        setQuickLoggedIn(true);
+        toast('企业账号登录成功，可以直接办理', 'success');
+      }
     }
   } catch (error) {
     log('OIDC', { error: String(error.message || error) }, 'DENY');

@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,6 +68,8 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     owner_name: config.primaryOwnerName || process.env.M01_PRIMARY_OWNER_NAME || '朱剑军'
   };
   const adminToken = config.adminToken || process.env.M01_ADMIN_TOKEN || 'local-demo-admin';
+  const demoOneClickLogin = config.demoOneClickLogin ?? String(process.env.M01_DEMO_ONE_CLICK_LOGIN || 'true').toLowerCase() === 'true';
+  const demoSessions = new Map();
   const m07Secret = config.m07Secret || process.env.M07_WEBHOOK_SECRET || 'local-demo-m07-secret';
   const m13Secret = config.m13Secret || process.env.M13_WEBHOOK_SECRET || 'local-demo-m13-secret';
   const persistence = config.persistence || null;
@@ -137,11 +139,32 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     return safeEqual(header.slice(7), adminToken);
   };
 
+  const cookieValue = (req, name) => {
+    const cookies = String(req.headers.cookie || '').split(';');
+    const item = cookies.find((part) => part.trim().startsWith(`${name}=`));
+    return item ? decodeURIComponent(item.trim().slice(name.length + 1)) : '';
+  };
+
+  const checkDemoSession = (req) => {
+    const sessionId = cookieValue(req, 'm01_demo_session');
+    const expiresAt = sessionId ? demoSessions.get(sessionId) : 0;
+    if (!expiresAt) return false;
+    if (expiresAt <= Date.now()) {
+      demoSessions.delete(sessionId);
+      return false;
+    }
+    return true;
+  };
+
   const hasScope = (principal, scope) => principal.scope.includes(scope);
   const authenticateKernel = async (req) => {
     const header = String(req.headers.authorization || '');
+    if (mode === 'demo') {
+      return (checkAdmin(req) || checkDemoSession(req))
+        ? { ok: true, principal: null }
+        : { ok: false, status: 401, error: '请先点击一键登录' };
+    }
     if (!header.startsWith('Bearer ')) return { ok: false, status: 401, error: 'missing or invalid bearer token' };
-    if (mode === 'demo') return checkAdmin(req) ? { ok: true, principal: null } : { ok: false, status: 401, error: 'missing or invalid service token' };
     try {
       const verified = await oidcVerifier.verify(header.slice(7));
       const mapping = kernel.resolveExternalIdentity({ issuer: oidcConfig.issuer, subject: verified.principal_id });
@@ -158,12 +181,13 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     }
   };
 
-  const send = (res, status, payload) => {
+  const send = (res, status, payload, extraHeaders = {}) => {
     const body = JSON.stringify(payload, null, 2);
     res.writeHead(status, {
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Length': Buffer.byteLength(body),
-      'X-M01-Environment': mode === 'oidc' ? 'OIDC' : 'DEMO ONLY'
+      'X-M01-Environment': mode === 'oidc' ? 'OIDC' : 'DEMO ONLY',
+      ...extraHeaders
     });
     res.end(body);
   };
@@ -221,6 +245,27 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
     try {
       if (req.method === 'GET' && pathname === '/health') {
         send(res, 200, { status: 'ok', service: 'aeos-m01-kernel', mode, environment: mode === 'oidc' ? 'OIDC' : 'DEMO ONLY' });
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/auth/demo/login') {
+        if (mode !== 'demo' || !demoOneClickLogin) {
+          send(res, 404, { error: '演示环境一键登录未启用' });
+          return;
+        }
+        const sessionId = randomUUID();
+        demoSessions.set(sessionId, Date.now() + 8 * 60 * 60 * 1000);
+        send(res, 200, { logged_in: true, mode: 'demo', organization }, {
+          'Set-Cookie': `m01_demo_session=${encodeURIComponent(sessionId)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=28800`,
+          'Cache-Control': 'no-store'
+        });
+        return;
+      }
+
+      if (req.method === 'POST' && pathname === '/auth/demo/logout') {
+        const sessionId = cookieValue(req, 'm01_demo_session');
+        if (sessionId) demoSessions.delete(sessionId);
+        send(res, 200, { logged_in: false }, { 'Set-Cookie': 'm01_demo_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0' });
         return;
       }
 
@@ -361,7 +406,8 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
         }
         const adminRoute = pathname === '/kernel/v1/status' || pathname === '/kernel/v1/audit' || pathname === '/kernel/v1/revocations';
         const masterRoute = pathname.startsWith('/kernel/v1/master/');
-        if (mode === 'oidc' && (adminRoute || masterRoute) && !hasScope(principal, adminScope)) {
+        const quickRoute = pathname === '/kernel/v1/quick/person-action';
+        if (mode === 'oidc' && (adminRoute || masterRoute || quickRoute) && !hasScope(principal, adminScope)) {
           send(res, 403, { error: 'missing admin scope' });
           return;
         }
@@ -415,6 +461,28 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
               body.principal_id = principal.principal_id;
             }
           }
+        }
+        if (pathname === '/kernel/v1/quick/person-action') {
+          const actionMap = {
+            hire: { command: 'person.hire', position_id: body.position_id || 'POS_STAFF' },
+            transfer_manager: { command: 'person.transfer', position_id: 'POS_MANAGER' },
+            offboard: { command: 'person.offboard' }
+          };
+          const selected = actionMap[body.action];
+          if (!selected || !body.person_id) {
+            send(res, 400, { error: '请选择人员和办理事项' });
+            return;
+          }
+          const beforeState = snapshotBeforeMutation();
+          const result = kernel.dispatchCommand({
+            tenant_id: mode === 'oidc' ? principal.tenant_id : body.tenant_id,
+            command: selected.command,
+            params: { person_id: body.person_id, ...(selected.position_id ? { position_id: selected.position_id } : {}) }
+          });
+          if (result.trace_id && !(await persistOr503(res, beforeState))) return;
+          const message = result.decision === 'EXECUTED' ? '办理完成' : result.decision === 'REQUIRE_APPROVAL' ? '已进入审批' : '暂时不能办理';
+          send(res, 200, { ...result, message });
+          return;
         }
         if (pathname === '/kernel/v1/capabilities') {
           if (!body.principal_id) {
