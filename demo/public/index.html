@@ -425,6 +425,22 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
 .quick-process-step.waiting { color:var(--warn); border-color:rgba(232,163,61,.45); background:rgba(232,163,61,.06); }
 .quick-process-step.failed { color:var(--deny); border-color:rgba(240,86,79,.45); background:rgba(240,86,79,.06); }
 @media (max-width: 760px) { .quick-process-steps { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+.quick-inventory { margin-top:14px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg-2); }
+.quick-inventory-head { display:flex; justify-content:space-between; gap:10px; margin-bottom:8px; }
+.quick-inventory-head strong { color:var(--text-1); font-size:12px; }
+.quick-inventory-head span { color:var(--text-2); font-size:11px; }
+.inventory-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }
+.inventory-item { padding:7px 8px; border:1px solid var(--line); border-radius:6px; }
+.inventory-item dt { color:var(--text-3); font-size:10px; margin-bottom:3px; }
+.inventory-item dd { color:var(--text-1); font-size:11px; margin:0; }
+.inventory-item dd.ready { color:var(--allow); }
+.inventory-item dd.pending { color:var(--warn); }
+.inventory-item dd.recalled { color:var(--deny); }
+@media (max-width: 760px) { .inventory-list { grid-template-columns:1fr; } }
+.offboarded-card { margin-top:20px; }
+.offboarded-card summary { cursor:pointer; color:var(--text-1); font-size:13px; font-weight:700; }
+.offboarded-card summary::marker { color:var(--warn); }
+.offboarded-card .subtext { margin:8px 0 12px; }
 .approval-card { margin-top:20px; }
 .approval-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
 .approval-head h2 { margin:0; font-size:18px; }
@@ -518,6 +534,7 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
         <button type="button" class="btn nav-btn" data-nav-target="quickCard">办理中心</button>
         <button type="button" class="btn nav-btn" data-nav-target="approvalCard">审批中心<span id="navApprovalCount" class="nav-badge" hidden>0</span></button>
         <button type="button" class="btn nav-btn" data-nav-target="peopleCard">人员名单</button>
+        <button type="button" class="btn nav-btn" data-nav-target="offboardedPeopleCard">已离职人员</button>
         <button type="button" class="btn nav-btn" data-nav-target="auditCard">操作记录</button>
       </div>
       <details class="advanced-settings">
@@ -615,6 +632,10 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
           <li class="quick-process-step">办理事项</li>
           <li class="quick-process-step">办理完成</li>
         </ol>
+      </div>
+      <div id="quickInventory" class="quick-inventory" aria-live="polite">
+        <div class="quick-inventory-head"><strong>人员配备清单</strong><span id="quickInventoryPerson">请先选择人员</span></div>
+        <div id="quickInventoryRows"><div class="empty">选择人员后显示岗位、智能助手、设备和办公物品。</div></div>
       </div>
     </section>
     <section class="card approval-card" id="approvalCard" aria-labelledby="approvalTitle">
@@ -727,7 +748,7 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
       </div>
     </div>
     <div class="card" style="margin-bottom:20px">
-      <h3>人员名单和状态</h3>
+      <h3>在职人员名单和状态</h3>
       <div style="overflow-x:auto">
         <table>
           <thead><tr><th>人员</th><th>所属单位</th><th>在职状态</th><th>岗位</th><th>版本</th></tr></thead>
@@ -735,6 +756,18 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
         </table>
       </div>
     </div>
+    <section class="card offboarded-card" id="offboardedPeopleCard">
+      <details>
+        <summary>已离职人员（<span id="offboardedCount">0</span>）</summary>
+        <p class="subtext">离职人员不再出现在上面的在职名单中，这里只保留查询和交接记录。</p>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>人员</th><th>所属单位</th><th>离职状态</th><th>原岗位</th><th>版本</th></tr></thead>
+            <tbody id="offboardedPersonRows"><tr><td colspan="5" class="empty">暂无离职人员</td></tr></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
     <div class="card" id="auditCard">
       <h3>智能体状态</h3>
       <div style="overflow-x:auto">
@@ -905,6 +938,7 @@ const HUMAN_TENANTS = { TENANT_A: '恒剑光电' };
 const HUMAN_POSITIONS = { POS_STAFF: '普通员工', POS_MANAGER: '经理', POS_OWNER: '管理员兼总经理' };
 const HUMAN_STATUS = { active: '正常', pending: '待确认', offboarded: '已离职', revoked: '已撤销', inactive: '未启用', enabled: '正常' };
 let currentPeople = [];
+let currentAgents = [];
 let quickLoggedIn = false;
 function tenantLabel(id) { return HUMAN_TENANTS[id] || id || '未填写单位'; }
 function positionLabel(id) { return HUMAN_POSITIONS[id] || id || '未分配岗位'; }
@@ -982,11 +1016,36 @@ function updateQuickPersonStatus() {
   const person = currentPeople.find((item) => item.person_id === $('quickPerson')?.value);
   if (!person) {
     box.textContent = currentPeople.length ? '请输入关键词并选择人员' : '暂无可办理人员';
+    renderPersonInventory(null);
     renderQuickProcess('idle');
     return;
   }
   box.innerHTML = `<span class="st ${esc(person.status)}">${esc(statusLabel(person.status))}</span><span class="quick-person-meta">岗位：${esc(positionLabel(person.position_id))} · 部门：${esc(person.profile?.department_name || '未填写')}</span>`;
+  renderPersonInventory(person);
   renderQuickProcess('idle');
+}
+function renderPersonInventory(person) {
+  const title = $('quickInventoryPerson');
+  const box = $('quickInventoryRows');
+  if (!title || !box) return;
+  if (!person) {
+    title.textContent = '请先选择人员';
+    box.innerHTML = '<div class="empty">选择人员后显示岗位、智能助手、设备和办公物品。</div>';
+    return;
+  }
+  const ownedAgents = currentAgents.filter((agent) => agent.owner_person_id === person.person_id);
+  const active = person.status === 'active';
+  const offboarded = person.status === 'offboarded';
+  const roleStatus = active ? `已配备：${positionLabel(person.position_id)}` : offboarded ? `已收回：${positionLabel(person.position_id)}` : '待配置';
+  const agentStatus = active
+    ? (ownedAgents.length ? `已配备 ${ownedAgents.length} 个智能助手` : '暂无智能助手')
+    : offboarded
+      ? (ownedAgents.length ? `已停用 ${ownedAgents.length} 个智能助手` : '暂无智能助手')
+      : '待配置';
+  const physicalStatus = active ? '待登记' : offboarded ? '待核对归还' : '待发放';
+  const physicalClass = active ? 'pending' : offboarded ? 'recalled' : 'pending';
+  title.textContent = personLabel(person);
+  box.innerHTML = `<dl class="inventory-list"><div class="inventory-item"><dt>岗位权限</dt><dd class="${active ? 'ready' : offboarded ? 'recalled' : 'pending'}">${esc(roleStatus)}</dd></div><div class="inventory-item"><dt>智能助手配备</dt><dd class="${active ? 'ready' : offboarded ? 'recalled' : 'pending'}">${esc(agentStatus)}</dd></div><div class="inventory-item"><dt>电脑、手机等设备</dt><dd class="${physicalClass}">${physicalStatus}</dd></div><div class="inventory-item"><dt>办公物品</dt><dd class="${physicalClass}">${physicalStatus}</dd></div></dl>`;
 }
 function renderQuickProcess(stage = 'idle') {
   const person = currentPeople.find((item) => item.person_id === $('quickPerson')?.value);
@@ -1237,23 +1296,30 @@ function renderCaps(d) {
 
 function renderStatus(d) {
   currentPeople = Array.isArray(d.persons) ? d.persons : [];
+  currentAgents = Array.isArray(d.agents) ? d.agents : [];
   renderQuickPeople(currentPeople);
   if (!quickLoggedIn && d.master) setQuickLoggedIn(true);
   setMasterUI(d.master);
   $('aTenant').textContent = d.organization?.name || tenantLabel(d.master?.tenant_id || $('tenant').value);
   const people = currentPeople;
+  const activePeople = people.filter((person) => person.status !== 'offboarded');
+  const offboardedPeople = people.filter((person) => person.status === 'offboarded');
   const linked = people.filter((p) => ['direct', 'unique_name'].includes(p.profile?.account?.match_type)).length;
   const ambiguous = people.filter((p) => p.profile?.account?.match_type === 'ambiguous').length;
-  $('flowPeople').textContent = `${people.length} 条已加载`;
+  $('flowPeople').textContent = `${activePeople.length} 名在职 / ${offboardedPeople.length} 名离职`;
   $('flowAccounts').textContent = `${linked} 个已关联 / ${ambiguous} 个待复核`;
   setFlowState('flowImportState', people.length ? `${people.length} 人已加载` : '暂无人员', people.length ? 'done' : 'review');
   setFlowState('flowFilterState', `${linked} 个已关联 / ${ambiguous} 个待复核`, ambiguous ? 'review' : linked ? 'done' : '');
   const pr = $('personRows');
-  pr.innerHTML = people.length ? people.map((p) =>
+  pr.innerHTML = activePeople.length ? activePeople.map((p) =>
     `<tr><td><strong>${esc(personLabel(p))}</strong><span class="subtext">${esc(p.profile?.department_name || '部门未填写')}</span></td><td>${esc(tenantLabel(p.tenant_id))}<span class="subtext">内部编号：${esc(p.tenant_id)}</span></td><td><span class="st ${p.status}">${esc(statusLabel(p.status))}</span></td><td>${esc(positionLabel(p.position_id))}<span class="subtext">内部编号：${esc(p.position_id || '-')}</span></td><td>${p.seq}</td></tr>`).join('')
-    : '<tr><td colspan="5" class="empty">暂无人员</td></tr>';
+    : '<tr><td colspan="5" class="empty">暂无在职人员</td></tr>';
+  $('offboardedCount').textContent = String(offboardedPeople.length);
+  $('offboardedPersonRows').innerHTML = offboardedPeople.length ? offboardedPeople.map((p) =>
+    `<tr><td><strong>${esc(personLabel(p))}</strong><span class="subtext">${esc(p.profile?.department_name || '部门未填写')}</span></td><td>${esc(tenantLabel(p.tenant_id))}<span class="subtext">内部编号：${esc(p.tenant_id)}</span></td><td><span class="st ${p.status}">${esc(statusLabel(p.status))}</span></td><td>${esc(positionLabel(p.position_id))}<span class="subtext">原岗位</span></td><td>${p.seq}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="empty">暂无离职人员</td></tr>';
   const ar = $('agentRows');
-  ar.innerHTML = d.agents.length ? d.agents.map((a) =>
+  ar.innerHTML = currentAgents.length ? currentAgents.map((a) =>
     `<tr><td><strong>智能体</strong><span class="subtext">编号：${esc(a.agent_id)}</span></td><td>${esc(personLabelById(a.owner_person_id))}</td><td>${esc(a.parent_agent_id || '无')}</td><td>${a.scopes.length > 3 ? a.scopes.length + ' 项权限' : (a.scopes.join('、') || '无')}</td><td><span class="st ${a.status}">${esc(statusLabel(a.status))}</span></td></tr>`).join('')
     : '<tr><td colspan="5" class="empty">暂无智能体</td></tr>';
 }

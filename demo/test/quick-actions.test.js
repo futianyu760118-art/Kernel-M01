@@ -127,3 +127,13 @@ test('页面提供审批中心和可用的页面导航', () => {
   assert.match(html, /data-action="approveApproval"/);
   assert.match(html, /data-action="rejectApproval"/);
 });
+
+test('人员主名单隐藏离职人员，并提供单独名单和配备清单', () => {
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="offboardedPersonRows"/);
+  assert.match(html, /已离职人员/);
+  assert.match(html, /id="quickInventoryRows"/);
+  assert.match(html, /人员配备清单/);
+  assert.match(html, /renderPersonInventory/);
+  assert.match(html, /activePeople/);
+});

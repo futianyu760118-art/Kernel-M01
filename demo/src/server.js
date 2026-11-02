@@ -488,7 +488,7 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
           let approval = null;
           if (result.decision === 'REQUIRE_APPROVAL') {
             approval = kernel.listApprovals(tenantId).find((item) => item.status === 'PENDING'
-              && item.resource === 'person' && item.action === 'offboard' && item.object_id === body.person_id);
+              && item.resource === 'master' && item.action === 'person.offboard' && item.object_id === body.person_id);
             if (!approval) {
               const created = kernel.createApproval({
                 tenant_id: tenantId,
