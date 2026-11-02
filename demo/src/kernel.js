@@ -52,7 +52,7 @@ export class M01Kernel {
     this.positions.set('POS_STAFF', {
       position_id: 'POS_STAFF',
       tenant_id: 'TENANT_A',
-      name: 'Staff',
+      name: '普通员工',
       capabilities: [
         { resource: 'task', action: 'execute' },
         { resource: 'report', action: 'read' }
@@ -61,7 +61,7 @@ export class M01Kernel {
     this.positions.set('POS_MANAGER', {
       position_id: 'POS_MANAGER',
       tenant_id: 'TENANT_A',
-      name: 'Manager',
+      name: '经理',
       capabilities: [
         { resource: 'task', action: 'execute' },
         { resource: 'report', action: 'read' },
@@ -72,9 +72,67 @@ export class M01Kernel {
     this.positions.set('POS_OWNER', {
       position_id: 'POS_OWNER',
       tenant_id: 'TENANT_A',
-      name: 'Owner',
-      capabilities: [{ resource: 'report', action: 'read' }]
+      name: '管理员兼总经理',
+      capabilities: [
+        { resource: 'task', action: 'execute' },
+        { resource: 'report', action: 'read' },
+        { resource: 'report', action: 'approve' },
+        { resource: 'data', action: 'export' },
+        { resource: 'device', action: 'control' }
+      ]
     });
+  }
+
+  ensurePrimaryOwner({ tenant_id, organization_name, person_id, display_name, employee_code = null }) {
+    if (![tenant_id, organization_name, person_id, display_name].every((value) => typeof value === 'string' && value.trim())) {
+      return { ok: false, error: 'required: tenant_id, organization_name, person_id, display_name', status: 400 };
+    }
+    if (!this.positions.has('POS_OWNER')) return { ok: false, error: 'POS_OWNER not seeded', status: 500 };
+    const ownerPosition = this.positions.get('POS_OWNER');
+    const ownerCapabilities = [
+      { resource: 'task', action: 'execute' },
+      { resource: 'report', action: 'read' },
+      { resource: 'report', action: 'approve' },
+      { resource: 'data', action: 'export' },
+      { resource: 'device', action: 'control' }
+    ];
+    const positionChanged = ownerPosition.name !== '管理员兼总经理' || JSON.stringify(ownerPosition.capabilities) !== JSON.stringify(ownerCapabilities);
+    ownerPosition.name = '管理员兼总经理';
+    ownerPosition.capabilities = ownerCapabilities;
+    const profile = {
+      source_system: 'M01',
+      source_table: 'primary_owner',
+      display_name,
+      organization_name,
+      employee_code,
+      role_names: ['管理员', '总经理'],
+      account: { match_type: 'manual', username: null }
+    };
+    const existing = this.persons.get(person_id);
+    if (!existing) {
+      const event = this.applyM07Event({
+        event_id: `M01_PRIMARY_OWNER_V1_${person_id}`,
+        tenant_id,
+        type: 'person.hired',
+        person_id,
+        position_id: 'POS_OWNER',
+        seq: 1,
+        profile
+      });
+      if (event.ok === false) return event;
+      this._audit({ kind: 'm01.primary_owner.bootstrapped', tenant_id, person_id, organization_name, display_name });
+      return { ok: true, changed: true, idempotent: false, person: this._personView(this.persons.get(person_id)) };
+    }
+    if (existing.tenant_id !== tenant_id) return { ok: false, error: 'primary owner tenant mismatch', status: 403 };
+    if (existing.status !== 'active') return { ok: false, error: 'primary owner is not active', status: 403 };
+    const previousProfile = JSON.stringify(existing.profile || {});
+    const personPositionChanged = existing.position_id !== 'POS_OWNER';
+    existing.position_id = 'POS_OWNER';
+    existing.profile = { ...(existing.profile || {}), ...profile };
+    if (personPositionChanged || positionChanged) this._bumpAuthorizationVersion(person_id, 'primary owner role initialized');
+    const changed = positionChanged || personPositionChanged || previousProfile !== JSON.stringify(existing.profile);
+    if (changed) this._audit({ kind: 'm01.primary_owner.updated', tenant_id, person_id, organization_name, display_name });
+    return { ok: true, changed, idempotent: !changed, person: this._personView(existing) };
   }
 
   mapExternalIdentity({ issuer, subject, principal_id, tenant_id }) {

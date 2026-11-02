@@ -61,6 +61,12 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
   const requiredScope = oidcConfig.requiredScope || 'm01:policy:read';
   const adminScope = config.adminScope || oidcConfig.adminScope || process.env.M01_OIDC_ADMIN_SCOPE || 'm01:admin';
   const delegateScope = config.delegateScope || oidcConfig.delegateScope || 'm01:policy:delegate';
+  const organization = {
+    tenant_id: config.primaryTenantId || process.env.M01_PRIMARY_TENANT_ID || 'TENANT_A',
+    name: config.primaryOrganizationName || process.env.M01_PRIMARY_TENANT_NAME || '恒剑光电',
+    owner_person_id: config.primaryOwnerPersonId || process.env.M01_PRIMARY_OWNER_PERSON_ID || 'P_OWNER',
+    owner_name: config.primaryOwnerName || process.env.M01_PRIMARY_OWNER_NAME || '朱剑军'
+  };
   const adminToken = config.adminToken || process.env.M01_ADMIN_TOKEN || 'local-demo-admin';
   const m07Secret = config.m07Secret || process.env.M07_WEBHOOK_SECRET || 'local-demo-m07-secret';
   const m13Secret = config.m13Secret || process.env.M13_WEBHOOK_SECRET || 'local-demo-m13-secret';
@@ -371,7 +377,7 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
           return;
         }
         if (req.method === 'GET' && pathname === '/kernel/v1/status') {
-          send(res, 200, { ...kernel.status(), environment: mode === 'oidc' ? 'OIDC' : 'DEMO ONLY', mode });
+          send(res, 200, { ...kernel.status(), organization, environment: mode === 'oidc' ? 'OIDC' : 'DEMO ONLY', mode });
           return;
         }
         if (req.method === 'GET' && pathname === '/kernel/v1/audit') {
@@ -521,9 +527,34 @@ export function start() {
   const kernel = new M01Kernel({ allowImplicitOwner: configuredMode !== 'oidc' });
   const persistence = databaseUrl ? new PostgresStore({ connectionString: databaseUrl }) : null;
   const legacySourceDir = String(process.env.M01_EBMS_SOURCE_DIR || '').trim();
-  const server = createApp(kernel, { mode: configuredMode, persistence, requireExternalIdentityMapping: configuredMode === 'oidc' });
+  const primaryOwnerEnabled = String(process.env.M01_PRIMARY_OWNER_ENABLED || (configuredMode === 'demo' ? 'true' : 'false')).toLowerCase() === 'true';
+  const primaryOrganizationName = String(process.env.M01_PRIMARY_TENANT_NAME || '恒剑光电').trim();
+  const primaryTenantId = String(process.env.M01_PRIMARY_TENANT_ID || 'TENANT_A').trim();
+  const primaryOwnerPersonId = String(process.env.M01_PRIMARY_OWNER_PERSON_ID || 'P_OWNER').trim();
+  const primaryOwnerName = String(process.env.M01_PRIMARY_OWNER_NAME || '朱剑军').trim();
+  const server = createApp(kernel, {
+    mode: configuredMode,
+    persistence,
+    requireExternalIdentityMapping: configuredMode === 'oidc',
+    primaryOrganizationName,
+    primaryTenantId,
+    primaryOwnerPersonId,
+    primaryOwnerName
+  });
   server.startup = (async () => {
     await server.ready;
+    if (primaryOwnerEnabled) {
+      const beforeState = persistence ? kernel.exportState() : null;
+      const bootstrapped = kernel.ensurePrimaryOwner({
+        tenant_id: primaryTenantId,
+        organization_name: primaryOrganizationName,
+        person_id: primaryOwnerPersonId,
+        display_name: primaryOwnerName
+      });
+      if (bootstrapped.ok === false) throw new Error(`primary owner bootstrap failed: ${bootstrapped.error}`);
+      if (bootstrapped.changed && persistence) await server.persistState(beforeState);
+      console.log(`[M01] 首个管理员已配置：${primaryOrganizationName} / ${primaryOwnerName}（${primaryOwnerPersonId}）`);
+    }
     const identityBootstrap = String(process.env.M01_EXTERNAL_IDENTITIES_JSON || '').trim();
     if (identityBootstrap) {
       let mappings;

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AEOS M01 Kernel Console</title>
+<title>AEOS M01 总控台</title>
 <style>
 :root {
   --bg-0: #0b0e13; --bg-1: #11151c; --bg-2: #171d27; --bg-hover: #1c2432;
@@ -141,6 +141,7 @@ aside {
 }
 .field { margin-bottom: var(--sp-2); padding: 0 var(--sp-2); }
 .field label { display: block; font-size: 11.5px; color: var(--side-label); margin-bottom: 2px; }
+.form-help { margin: -2px var(--sp-2) 10px; color: var(--side-label); font-size: 11px; line-height: 1.5; }
 .field input {
   width: 100%; padding: 6px 9px; font-size: 12px; color: var(--text-1);
   background: var(--side-input); border: 1px solid var(--side-line-soft); border-radius: 6px;
@@ -382,6 +383,7 @@ th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
 tr:hover td { background: var(--bg-2); }
 td { color: var(--text-2); }
 td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace; }
+.subtext { display:block; color:var(--text-3); font-size:10px; margin-top:2px; font-family:inherit; }
 
 #log { height: 320px; overflow-y: auto; font: 12px/1.7 "Cascadia Code", Consolas, monospace; }
 .entry {
@@ -424,8 +426,8 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
 <body>
 
 <header id="topbar">
-  <div class="brand">AEOS <b>M01</b> Kernel Console</div>
-  <span class="badge">DEMO ONLY</span>
+  <div class="brand">AEOS <b>M01</b> 总控台</div>
+  <span class="badge" id="modeBadge">演示环境</span>
   <div class="themes" id="themes" role="group" aria-label="主题配色">
     <button type="button" class="th" data-th="midnight" style="--c:#4f7cf0" title="午夜蓝（默认）" aria-label="主题：午夜蓝"></button>
     <button type="button" class="th" data-th="violet" style="--c:#8b6ff2" title="紫罗兰" aria-label="主题：紫罗兰"></button>
@@ -445,58 +447,59 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
     <div class="nav-scroll">
       <div class="group">
         <h3>配置</h3>
-        <div class="field"><label>服务访问 Token（仅 DEMO）</label><input id="token" value="" autocomplete="off" placeholder="仅 DEMO 模式填写" /></div>
-        <div class="field"><label>M07 Secret（服务端调试）</label><input id="m07sec" value="" autocomplete="off" placeholder="仅本地调试填写" /></div>
-        <div class="field"><label>M13 Secret（服务端调试）</label><input id="m13sec" value="" autocomplete="off" placeholder="仅本地调试填写" /></div>
+        <div class="field"><label>演示访问密码（仅演示环境）</label><input id="token" value="" autocomplete="off" placeholder="请输入演示访问密码" /></div>
+        <p class="form-help">正式环境请点击“使用企业账号登录”；演示环境请填写管理员提供的访问密码。</p>
+        <div class="field"><label>人员同步密钥（系统内部）</label><input id="m07sec" value="" autocomplete="off" placeholder="系统内部使用" /></div>
+        <div class="field"><label>智能体同步密钥（系统内部）</label><input id="m13sec" value="" autocomplete="off" placeholder="系统内部使用" /></div>
         <button class="btn primary" data-action="loginOidc">使用企业账号登录（OIDC）<span class="hint">PKCE</span><span class="btn-spinner"></span></button>
-        <div class="field"><label>人员 ID</label><input id="person" value="P_1001" /></div>
-        <div class="field"><label>负责人 ID</label><input id="owner" value="P_OWNER" /></div>
-        <div class="field"><label>初始岗位</label><input id="position" value="POS_STAFF" /></div>
-        <div class="field"><label>租户</label><input id="tenant" value="TENANT_A" /></div>
+        <div class="field"><label>人员编号（内部编号）</label><input id="person" value="P_OWNER" /></div>
+        <div class="field"><label>负责人编号（内部编号）</label><input id="owner" value="P_OWNER" /></div>
+        <div class="field"><label>默认岗位编号</label><input id="position" value="POS_STAFF" /></div>
+        <div class="field"><label>单位编号（内部编号）</label><input id="tenant" value="TENANT_A" /></div>
       </div>
       <div class="group">
-        <h3>总控 Agent · 快捷口令</h3>
-        <button class="btn primary" data-action="masterRegister">注册/恢复总控 Agent<span class="hint">直接接口</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="sayPhrase" data-say="注册总控">注册总控 Agent<span class="hint">对话</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="sayPhrase" data-say="让 P_1001 入职，岗位 POS_STAFF">「来个人入职」<span class="btn-spinner"></span></button>
-        <button class="btn" data-action="sayPhrase" data-say="把 P_1001 调到经理岗">「调到经理岗」<span class="btn-spinner"></span></button>
-        <button class="btn danger" data-action="sayPhrase" data-say="让 P_1001 离职">▲「让 P_1001 离职」<span class="hint">高风险</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="sayPhrase" data-say="注册子 Agent A_CHILD_1001，归属 P_1001，scope task:execute">「注册个子 Agent」<span class="btn-spinner"></span></button>
-        <button class="btn danger" data-action="sayPhrase" data-say="撤销 P_1001">▲「撤销 P_1001」<span class="hint">高风险</span><span class="btn-spinner"></span></button>
+        <h3>管理员操作（简单说话即可）</h3>
+        <button class="btn primary" data-action="masterRegister">启用总控智能体<span class="hint">直接操作</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="sayPhrase" data-say="注册总控">启用总控智能体<span class="hint">对话</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="sayPhrase" data-say="让 P_OWNER 入职，岗位 POS_STAFF">「办理人员入职」<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="sayPhrase" data-say="把 P_OWNER 调到经理岗">「调整到经理岗」<span class="btn-spinner"></span></button>
+        <button class="btn danger" data-action="sayPhrase" data-say="确认让 P_OWNER 离职">▲「办理人员离职」<span class="hint">高风险</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="sayPhrase" data-say="注册子 Agent A_CHILD_1001，归属 P_OWNER，scope task:execute">「注册子智能体」<span class="btn-spinner"></span></button>
+        <button class="btn danger" data-action="sayPhrase" data-say="确认撤销 P_OWNER">▲「撤销人员权限」<span class="hint">高风险</span><span class="btn-spinner"></span></button>
         <button class="btn" data-action="sayPhrase" data-say="看看系统状态">「看看系统状态」<span class="btn-spinner"></span></button>
       </div>
       <div class="group">
-        <h3>M07 人事事件（HMAC）</h3>
-        <button class="btn" data-action="m07hire">入职绑定岗位<span class="hint">hired</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="m07transfer">调岗 → 经理<span class="hint">moved</span><span class="btn-spinner"></span></button>
-        <button class="btn danger" data-action="m07offboard">▲ 离职撤权<span class="hint">fired</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="m07dup">重发上一事件<span class="hint">幂等</span><span class="btn-spinner"></span></button>
+        <h3>人员同步（系统内部）</h3>
+        <button class="btn" data-action="m07hire">办理入职并绑定岗位<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="m07transfer">调整到经理岗<span class="btn-spinner"></span></button>
+        <button class="btn danger" data-action="m07offboard">▲ 办理离职并撤权<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="m07dup">再次发送上一条记录<span class="hint">防重复</span><span class="btn-spinner"></span></button>
       </div>
       <div class="group">
-        <h3>POMS 能力 / 授权</h3>
-        <button class="btn" data-action="caps">查询能力<span class="hint">caps</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="authTask">判权 task:execute<span class="btn-spinner"></span></button>
-        <button class="btn" data-action="authExport">▲ 判权 data:export<span class="hint">risk</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="authDevice">▲ 判权 device:control<span class="hint">risk</span><span class="btn-spinner"></span></button>
+        <h3>权限查询与授权</h3>
+        <button class="btn" data-action="caps">查看这个人的权限<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="authTask">测试普通操作权限<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="authExport">▲ 测试数据导出权限<span class="hint">需审批</span><span class="btn-spinner"></span></button>
+        <button class="btn" data-action="authDevice">▲ 测试设备操作权限<span class="hint">需审批</span><span class="btn-spinner"></span></button>
       </div>
       <div class="group">
-        <h3>M13 Agent（HMAC）</h3>
-        <button class="btn" data-action="agentReg">注册主 Agent<span class="hint">main</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="agentChild">注册子 Agent<span class="hint">clamp</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="agentAuthTask">Agent 判权 task<span class="btn-spinner"></span></button>
-        <button class="btn" data-action="agentAuthExport">▲ Agent 判权 export<span class="btn-spinner"></span></button>
+        <h3>智能体接入（系统内部）</h3>
+        <button class="btn" data-action="agentReg">接入主智能体<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="agentChild">接入子智能体<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="agentAuthTask">测试智能体普通权限<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="agentAuthExport">▲ 测试智能体导出权限<span class="btn-spinner"></span></button>
       </div>
       <div class="group">
-        <h3>系统观测</h3>
-        <button class="btn" data-action="refreshStatus">刷新状态<span class="hint">status</span><span class="btn-spinner"></span></button>
-        <button class="btn" data-action="refreshAudit">拉取审计<span class="hint">audit</span><span class="btn-spinner"></span></button>
+        <h3>系统查看</h3>
+        <button class="btn" data-action="refreshStatus">刷新系统状态<span class="btn-spinner"></span></button>
+        <button class="btn" data-action="refreshAudit">查看操作记录<span class="btn-spinner"></span></button>
         <button class="btn" data-action="clearLog">清空日志<span class="btn-spinner"></span></button>
       </div>
     </div>
     <div class="side-anchor" id="anchor">
-      <div class="row"><span class="k">负责人</span><span class="v" id="aOwner">P_OWNER</span></div>
-      <div class="row"><span class="k">总控</span><span class="v"><span class="st unregistered" id="aMasterSt">未注册</span></span></div>
-      <div class="row"><span class="k">租户</span><span class="v" id="aTenant">TENANT_A</span></div>
+      <div class="row"><span class="k">管理员</span><span class="v" id="aOwner">朱剑军</span></div>
+      <div class="row"><span class="k">总控智能体</span><span class="v"><span class="st unregistered" id="aMasterSt">未启用</span></span></div>
+      <div class="row"><span class="k">单位</span><span class="v" id="aTenant">恒剑光电</span></div>
     </div>
   </aside>
 
@@ -504,78 +507,75 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
     <section class="card flow-card" id="flowCard" aria-labelledby="flowTitle">
       <div class="flow-head">
         <h3 id="flowTitle">系统操作流程</h3>
-        <span class="flow-kicker">从 EBMS 人员到统一授权</span>
+        <span class="flow-kicker">从原系统人员到统一权限</span>
         <button type="button" class="flow-toggle" id="flowToggle" aria-expanded="true">收起</button>
       </div>
       <div id="flowBody">
         <div class="flow-summary" aria-label="当前系统状态">
-          <span>Docker <b id="flowDockerState">DEMO</b></span>
+          <span>运行环境 <b id="flowDockerState">检查中</b></span>
           <span>人员 <b id="flowPeople">检查中</b></span>
-          <span>账号映射 <b id="flowAccounts">待检查</b></span>
+          <span>账号关联 <b id="flowAccounts">待检查</b></span>
         </div>
         <ol class="flow-steps">
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">1</span><strong>检查系统</strong><span class="flow-state" id="flowHealthState">检查中</span></div>
-            <p>确认 Docker 容器健康，当前页面能正常连接 M01。</p>
-            <code>GET /health</code>
+            <div class="flow-step-title"><span class="flow-number">1</span><strong>先看系统是否正常</strong><span class="flow-state" id="flowHealthState">检查中</span></div>
+            <p>确认系统正在运行，页面可以正常连接总控台。</p>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">2</span><strong>导入人员</strong><span class="flow-state" id="flowImportState">启动时导入</span></div>
-            <p>从 EBMS 只读导入人员，不迁移旧密码，重复导入自动幂等。</p>
-            <button type="button" class="flow-action" data-action="refreshStatus">刷新人员状态</button>
+            <div class="flow-step-title"><span class="flow-number">2</span><strong>导入原系统人员</strong><span class="flow-state" id="flowImportState">启动时导入</span></div>
+            <p>从原 EBMS 读取人员名单，只带入姓名、部门、岗位和账号关联，不带入旧密码。</p>
+            <button type="button" class="flow-action" data-action="refreshStatus">刷新人员名单</button>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">3</span><strong>筛选和复核</strong><span class="flow-state" id="flowFilterState">待检查</span></div>
-            <p>优先使用唯一账号关联；同名账号、无账号和岗位未映射进入复核。</p>
-            <code>linked / ambiguous / unlinked</code>
+            <div class="flow-step-title"><span class="flow-number">3</span><strong>筛选并确认人员</strong><span class="flow-state" id="flowFilterState">待检查</span></div>
+            <p>能自动对应账号的直接通过；重名、没有账号或岗位不清楚的人员，需要管理员人工确认。</p>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">4</span><strong>注册总控</strong><span class="flow-state" id="flowMasterState">待操作</span></div>
-            <p>OIDC 登录后绑定已导入的 Owner；正式模式不自动创建负责人或恢复已撤销总控。</p>
-            <button type="button" class="flow-action" data-action="masterRegister">注册/恢复总控</button>
+            <div class="flow-step-title"><span class="flow-number">4</span><strong>启用总控智能体</strong><span class="flow-state" id="flowMasterState">待操作</span></div>
+            <p>由管理员朱剑军启用总控智能体。总控智能体负责接收简单指令，但不能绕过审批。</p>
+            <button type="button" class="flow-action" data-action="masterRegister">启用总控智能体</button>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">5</span><strong>查询能力</strong><span class="flow-state" id="flowCapsState">待操作</span></div>
-            <p>输入人员 ID，先查询 M01 根据岗位计算出的能力清单。</p>
-            <button type="button" class="flow-action" data-action="caps">查询当前人员能力</button>
+            <div class="flow-step-title"><span class="flow-number">5</span><strong>查看人员权限</strong><span class="flow-state" id="flowCapsState">待操作</span></div>
+            <p>选择或填写人员编号，查看这个人目前能做什么。</p>
+            <button type="button" class="flow-action" data-action="caps">查看当前人员权限</button>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">6</span><strong>判权执行</strong><span class="flow-state" id="flowAuthState">待操作</span></div>
-            <p>普通动作先判权；后端返回 ALLOW 才允许业务系统执行。</p>
-            <button type="button" class="flow-action" data-action="authTask">测试 task:execute</button>
+            <div class="flow-step-title"><span class="flow-number">6</span><strong>先确认再操作</strong><span class="flow-state" id="flowAuthState">待操作</span></div>
+            <p>普通操作先检查权限，允许后业务系统才执行；不允许就直接拦截。</p>
+            <button type="button" class="flow-action" data-action="authTask">测试普通操作权限</button>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">7</span><strong>高风险审批</strong><span class="flow-state review" id="flowApprovalState">需票据</span></div>
-            <p>撤权、离职、导出等高风险动作必须申请、审批和一次性消费票据。</p>
-            <code>POST /kernel/v1/approvals</code>
+            <div class="flow-step-title"><span class="flow-number">7</span><strong>高风险操作要审批</strong><span class="flow-state review" id="flowApprovalState">需要审批</span></div>
+            <p>撤权、离职、数据导出和设备操作，必须先申请、审批，不能只点一个按钮完成。</p>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">8</span><strong>审计闭环</strong><span class="flow-state" id="flowAuditState">待操作</span></div>
-            <p>每次判权、审批和执行都要能通过 trace_id 追踪和复核。</p>
-            <button type="button" class="flow-action" data-action="refreshAudit">拉取审计</button>
+            <div class="flow-step-title"><span class="flow-number">8</span><strong>查看操作记录</strong><span class="flow-state" id="flowAuditState">待操作</span></div>
+            <p>每次登录、授权、审批和执行都会留下记录，管理员可以按记录复查。</p>
+            <button type="button" class="flow-action" data-action="refreshAudit">查看操作记录</button>
           </li>
         </ol>
       </div>
     </section>
     <div class="card" style="margin-bottom:20px">
-      <h3>负责人指令台 · 与总控 Agent 对话（大白话即可）</h3>
+      <h3>管理员指令台 · 用大白话告诉总控台要做什么</h3>
       <div class="chatwrap">
         <div class="chat-head">
-          <span class="st unregistered" id="mStatus">总控未注册</span>
-          <span class="ctitle">总控 Agent · 负责人下属 · 即时反馈 · 选项点选即答</span>
+          <span class="st unregistered" id="mStatus">总控未启用</span>
+          <span class="ctitle">总控智能体 · 管理员朱剑军使用 · 即时反馈</span>
         </div>
         <div id="chat" class="chat" aria-live="polite">
-          <div class="sysmsg">直接对总控 Agent 说事，例如「让 P_1001 入职」「把 P_1001 调到经理岗」「看看系统状态」</div>
-          <div class="typing" id="typing" hidden aria-label="总控 Agent 正在处理"><i></i><i></i><i></i></div>
+          <div class="sysmsg">可以直接说：启用总控、查看系统状态、查看朱剑军的权限。</div>
+          <div class="typing" id="typing" hidden aria-label="总控智能体正在处理"><i></i><i></i><i></i></div>
         </div>
         <div class="chat-input">
-          <input id="sayInput" placeholder="对总控 Agent 说：让 P_1001 入职，岗位 POS_STAFF…" aria-label="用大白话下达指令" autocomplete="off" />
+          <input id="sayInput" placeholder="例如：看看系统状态" aria-label="用大白话下达指令" autocomplete="off" />
           <button class="btn send" data-action="saySend" style="width:auto;min-width:96px;margin:0"><span class="btn-label">发送</span><span class="btn-spinner"></span></button>
         </div>
       </div>
     </div>
       <div class="hist-wrap">
-        <div class="hist-head">指令历史 <span class="mono" id="histCount">(0)</span><span class="hist-tip">点击条目回填输入框</span></div>
+        <div class="hist-head">操作历史 <span class="mono" id="histCount">(0)</span><span class="hist-tip">点击记录可以再次填写</span></div>
         <ul id="hist" class="hist"><li class="empty">本会话暂无指令</li></ul>
       </div>
     </div>
@@ -591,7 +591,7 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
         </dl>
       </div>
       <div class="card">
-        <h3>主体能力快照</h3>
+        <h3>人员权限快照</h3>
         <div id="capsBox"><p class="empty">查询能力后显示</p></div>
         <dl class="kv" style="margin-top:12px">
           <dt>主体</dt><dd id="cPrincipal">-</dd>
@@ -600,25 +600,25 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
       </div>
     </div>
     <div class="card" style="margin-bottom:20px">
-      <h3>人员状态</h3>
+      <h3>人员名单和状态</h3>
       <div style="overflow-x:auto">
         <table>
-          <thead><tr><th>Person</th><th>租户</th><th>状态</th><th>岗位</th><th>seq</th></tr></thead>
+          <thead><tr><th>人员</th><th>所属单位</th><th>在职状态</th><th>岗位</th><th>版本</th></tr></thead>
           <tbody id="personRows"><tr><td colspan="5" class="empty">暂无数据，刷新状态</td></tr></tbody>
         </table>
       </div>
     </div>
     <div class="card">
-      <h3>Agent 状态</h3>
+      <h3>智能体状态</h3>
       <div style="overflow-x:auto">
         <table>
-          <thead><tr><th>Agent</th><th>Owner</th><th>父级</th><th>Scopes</th><th>状态</th></tr></thead>
+          <thead><tr><th>智能体</th><th>负责人</th><th>上级智能体</th><th>权限范围</th><th>状态</th></tr></thead>
           <tbody id="agentRows"><tr><td colspan="5" class="empty">暂无数据，刷新状态</td></tr></tbody>
         </table>
       </div>
     </div>
     <div class="card" style="margin-top:20px">
-      <h3>活动日志（本页会话）</h3>
+      <h3>本页操作记录</h3>
       <div id="log"></div>
     </div>
   </main>
@@ -747,6 +747,21 @@ logBox.addEventListener('click', (ev) => {
 });
 
 const OIDC = { config: null, accessToken: null, tokenType: 'Bearer' };
+const HUMAN_TENANTS = { TENANT_A: '恒剑光电' };
+const HUMAN_POSITIONS = { POS_STAFF: '普通员工', POS_MANAGER: '经理', POS_OWNER: '管理员兼总经理' };
+const HUMAN_STATUS = { active: '正常', pending: '待确认', offboarded: '已离职', revoked: '已撤销', inactive: '未启用', enabled: '正常' };
+let currentPeople = [];
+function tenantLabel(id) { return HUMAN_TENANTS[id] || id || '未填写单位'; }
+function positionLabel(id) { return HUMAN_POSITIONS[id] || id || '未分配岗位'; }
+function statusLabel(value) { return HUMAN_STATUS[value] || value || '未知'; }
+function personLabel(person) {
+  const name = person?.profile?.display_name || person?.display_name || '未填写姓名';
+  return `${name}（编号 ${person?.person_id || '无编号'}）`;
+}
+function personLabelById(id) {
+  const person = currentPeople.find((item) => item.person_id === id);
+  return person ? personLabel(person) : (id || '未填写');
+}
 const headers = () => ({
   'Authorization': `${OIDC.accessToken ? OIDC.tokenType + ' ' + OIDC.accessToken : 'Bearer ' + $('token').value}`,
   'Content-Type': 'application/json'
@@ -824,14 +839,14 @@ async function api(method, path, body, hdrs) {
 function setMasterUI(master) {
   const stEl = $('mStatus'), anEl = $('aMasterSt');
   if (!master) {
-    stEl.className = 'st unregistered'; stEl.textContent = '总控未注册';
-    anEl.className = 'st unregistered'; anEl.textContent = '未注册';
+    stEl.className = 'st unregistered'; stEl.textContent = '总控未启用';
+    anEl.className = 'st unregistered'; anEl.textContent = '未启用';
     return;
   }
   const cls = master.status === 'active' ? 'active' : master.status;
-  stEl.className = 'st ' + cls; stEl.textContent = master.status === 'active' ? '总控在线' : '总控 ' + master.status;
-  anEl.className = 'st ' + cls; anEl.textContent = master.status === 'active' ? '在线' : master.status;
-  $('aOwner').textContent = master.owner_person_id;
+  stEl.className = 'st ' + cls; stEl.textContent = master.status === 'active' ? '总控在线' : '总控 ' + statusLabel(master.status);
+  anEl.className = 'st ' + cls; anEl.textContent = master.status === 'active' ? '在线' : statusLabel(master.status);
+  $('aOwner').textContent = personLabelById(master.owner_person_id);
 }
 
 const chatBox = $('chat');
@@ -930,8 +945,8 @@ function renderDecision(d) {
 }
 
 function renderCaps(d) {
-  $('cPrincipal').textContent = d.principal_id || '-';
-  $('cStatus').textContent = d.status || '-';
+  $('cPrincipal').textContent = personLabelById(d.principal_id);
+  $('cStatus').textContent = statusLabel(d.status);
   setFlowState('flowCapsState', d.status === 'active' ? '已查询' : (d.status || '无能力'), d.status === 'active' ? 'done' : 'review');
   const box = $('capsBox');
   if (!d.capabilities || !d.capabilities.length) {
@@ -939,27 +954,28 @@ function renderCaps(d) {
     return;
   }
   box.innerHTML = '<ul class="caps-list">' + d.capabilities.map((c) =>
-    `<li class="${c.require_approval ? 'approval' : ''}" title="${c.require_approval ? '高风险：需批准票据' : ''}">${c.resource}:${c.action}${c.require_approval ? ' ▲' : ''}</li>`).join('') + '</ul>';
+    `<li class="${c.require_approval ? 'approval' : ''}" title="${c.require_approval ? '高风险：需要审批' : ''}">${c.resource}:${c.action}${c.require_approval ? '（需要审批）' : ''}</li>`).join('') + '</ul>';
 }
 
 function renderStatus(d) {
+  currentPeople = Array.isArray(d.persons) ? d.persons : [];
   setMasterUI(d.master);
-  $('aTenant').textContent = d.master?.tenant_id || $('tenant').value;
-  const people = Array.isArray(d.persons) ? d.persons : [];
+  $('aTenant').textContent = d.organization?.name || tenantLabel(d.master?.tenant_id || $('tenant').value);
+  const people = currentPeople;
   const linked = people.filter((p) => ['direct', 'unique_name'].includes(p.profile?.account?.match_type)).length;
   const ambiguous = people.filter((p) => p.profile?.account?.match_type === 'ambiguous').length;
   $('flowPeople').textContent = `${people.length} 条已加载`;
-  $('flowAccounts').textContent = `${linked} 已关联 / ${ambiguous} 冲突`;
-  setFlowState('flowImportState', people.length ? `${people.length} 条已加载` : '暂无人员', people.length ? 'done' : 'review');
-  setFlowState('flowFilterState', `${linked} 关联 / ${ambiguous} 冲突`, ambiguous ? 'review' : linked ? 'done' : '');
+  $('flowAccounts').textContent = `${linked} 个已关联 / ${ambiguous} 个待复核`;
+  setFlowState('flowImportState', people.length ? `${people.length} 人已加载` : '暂无人员', people.length ? 'done' : 'review');
+  setFlowState('flowFilterState', `${linked} 个已关联 / ${ambiguous} 个待复核`, ambiguous ? 'review' : linked ? 'done' : '');
   const pr = $('personRows');
   pr.innerHTML = people.length ? people.map((p) =>
-    `<tr><td class="pid">${p.person_id}</td><td>${p.tenant_id}</td><td><span class="st ${p.status}">${p.status}</span></td><td>${p.position_id || '-'}</td><td>${p.seq}</td></tr>`).join('')
+    `<tr><td><strong>${esc(personLabel(p))}</strong><span class="subtext">${esc(p.profile?.department_name || '部门未填写')}</span></td><td>${esc(tenantLabel(p.tenant_id))}<span class="subtext">内部编号：${esc(p.tenant_id)}</span></td><td><span class="st ${p.status}">${esc(statusLabel(p.status))}</span></td><td>${esc(positionLabel(p.position_id))}<span class="subtext">内部编号：${esc(p.position_id || '-')}</span></td><td>${p.seq}</td></tr>`).join('')
     : '<tr><td colspan="5" class="empty">暂无人员</td></tr>';
   const ar = $('agentRows');
   ar.innerHTML = d.agents.length ? d.agents.map((a) =>
-    `<tr><td class="pid">${a.agent_id}</td><td class="pid">${a.owner_person_id}</td><td>${a.parent_agent_id || '-'}</td><td>${a.scopes.length > 3 ? a.scopes.length + ' scopes' : (a.scopes.join(', ') || '-')}</td><td><span class="st ${a.status}">${a.status}</span></td></tr>`).join('')
-    : '<tr><td colspan="5" class="empty">暂无 Agent</td></tr>';
+    `<tr><td><strong>智能体</strong><span class="subtext">编号：${esc(a.agent_id)}</span></td><td>${esc(personLabelById(a.owner_person_id))}</td><td>${esc(a.parent_agent_id || '无')}</td><td>${a.scopes.length > 3 ? a.scopes.length + ' 项权限' : (a.scopes.join('、') || '无')}</td><td><span class="st ${a.status}">${esc(statusLabel(a.status))}</span></td></tr>`).join('')
+    : '<tr><td colspan="5" class="empty">暂无智能体</td></tr>';
 }
 
 const NL_TEMPLATES = {
@@ -1029,10 +1045,10 @@ const actions = {
           master_agent_id: 'A_MASTER_KERNEL',
           idempotency_key: `${tenantId}:${ownerPersonId}:A_MASTER_KERNEL`
         }, headers());
-    log('MASTER注册', r.data, r.ok ? 'EXECUTED' : 'DENY');
+    log('总控启用', r.data, r.ok ? 'EXECUTED' : 'DENY');
         if (r.ok) {
               setFlowState('flowMasterState', r.data.idempotent ? '已恢复' : '已注册', 'done');
-          toast(r.data.idempotent ? '总控 Agent 已恢复' : '总控 Agent 已注册', 'success');
+          toast(r.data.idempotent ? '总控智能体已恢复' : '总控智能体已启用', 'success');
           await actions.refreshStatus();
         } else {
               setFlowState('flowMasterState', '失败/需重试', 'deny');
@@ -1080,7 +1096,7 @@ const actions = {
   async agentAuthExport() { await this._auth('A_MAIN_1001', 'data', 'export'); },
   async refreshStatus() {
     const r = await api('GET', '/kernel/v1/status', null, headers());
-    log(`STATUS ${r.status}`, { master: r.data.master?.status || 'unregistered', persons: r.data.persons?.length, agents: r.data.agents?.length, events: r.data.events_received, audit: r.data.audit_entries });
+    log(`系统状态 ${r.status}`, { master: r.data.master?.status || '未启用', persons: r.data.persons?.length, agents: r.data.agents?.length, events: r.data.events_received, audit: r.data.audit_entries });
     if (r.ok) renderStatus(r.data);
   },
   async refreshAudit() {
@@ -1135,7 +1151,8 @@ document.addEventListener('click', async (ev) => {
     const ms = Math.round(performance.now() - t0);
     $('health').className = 'health online';
     $('healthText').textContent = `online · ${ms}ms`;
-    $('flowDockerState').textContent = d.mode === 'oidc' ? 'OIDC' : 'DEMO';
+    $('flowDockerState').textContent = d.mode === 'oidc' ? '正式环境' : '演示环境';
+    $('modeBadge').textContent = d.mode === 'oidc' ? '正式环境' : '演示环境';
     setFlowState('flowHealthState', `online · ${ms}ms`, 'done');
     log('HEALTH', d);
   } catch {
@@ -1148,9 +1165,9 @@ document.addEventListener('click', async (ev) => {
   await actions.refreshStatus().catch(() => {});
   $('sayInput').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('sayInput') && document.querySelector('button[data-action="saySend"]').click(); });
   renderChips([
-    { label: '让 P_1001 入职', prompt: '让 P_1001 入职，岗位 POS_STAFF', primary: true },
+    { label: '启用总控智能体', prompt: '注册总控', primary: true },
     { label: '看看系统状态', prompt: '看看系统状态' },
-    { label: '查 P_1001 的权限', prompt: '查一下 P_1001 的能力' }
+    { label: '查朱剑军的权限', prompt: '查一下 P_OWNER 的能力' }
   ]);
 })();
 </script>

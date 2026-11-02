@@ -11,9 +11,10 @@ demo/
   src/server.js           # Node.js HTTP API：OIDC、M07/M13 HMAC、授权/审批/撤权/状态接口
   src/kernel.js           # 控制面读模型、Guard 决策、审批票据、撤权状态机、审计
   src/postgres-store.js   # PostgreSQL 迁移、快照、版本冲突与审计持久化
-  public/index.html       # OIDC PKCE 控制台与系统操作流程
+  public/index.html       # 中文总控台与系统操作流程
   test/*.test.js          # node:test 契约、OIDC 和持久化测试
-  docs/CONTRACTS.md       # 候选接口契约（L1）
+  docs/CONTRACTS.md       # 接口契约（L1）
+  docs/QUICK-START-ZH.md  # 恒剑光电简单操作说明
   src/legacy-import.js    # EBMS 人员导入、账号冲突识别、筛选和幂等迁移
   scripts/import-ebms-personnel.mjs # 使用真实 EBMS 数据做导入/筛选/授权验证
   .env.example            # 环境变量模板
@@ -48,7 +49,7 @@ npm start
 
 - Windows：双击/执行 `start_windows.bat`（先测试后启动）。
 - 端口占用时：先停止占用 3101 的程序，或在 `.env` 中改 `PORT`。
-- Docker：复制 `.env.example` 为 `.env`，替换全部密钥和 OIDC 配置，再执行 `docker compose up -d --build`；详细流程见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)。
+- Docker：复制 `.env.example` 为 `.env`，替换密钥和企业登录配置，再执行 `docker compose up -d --build`；日常操作见 [`docs/QUICK-START-ZH.md`](docs/QUICK-START-ZH.md)，正式部署细节见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)。
 
 ## 环境变量
 
@@ -67,7 +68,7 @@ npm start
 
 ## 本地演示链路（对应页面按钮）
 
-1. **总控通道 / 负责人指令台（大白话对话）**：注册总控 Agent（绑定负责人 P_OWNER）→ 主区对话输入框用通俗语言下指令（如「让 P_1001 入职」「把 P_1001 调到经理岗」「看看系统状态」）；总控 Agent（下属）即时回报；缺参数或不能执行时以**选项 chips** 追问（点选即答，≤3 项含主选项，范式移植自 multica Mika）；高风险指令先确认、无票据 fail-closed；指令历史点击回填输入框。
+1. **总控通道 / 管理员指令台（大白话对话）**：恒剑光电的朱剑军作为管理员和总经理，启用总控智能体后，可以直接说“看看系统状态”“查看 P_OWNER 的权限”等简单指令；高风险指令先确认、无审批票据安全拦截。
 2. M07 入职（HMAC 签名事件）→ 人员激活并绑定岗位。
 3. POMS 查询能力 → 仅返回岗位策略允许的能力。
 4. authorize：普通动作 ALLOW；未授权动作 DENY；高风险（数据导出/付款/生产控制）REQUIRE_APPROVAL。审批申请、审批决定和一次性票据消费由 M01 DEMO 闭环演示。
