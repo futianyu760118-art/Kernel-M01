@@ -160,4 +160,3 @@
 
 - [x] **Step 5: Record deployment evidence**
   - Update `work/AEOS-hub/docs/` or the existing operations document with the exact non-secret commands and observed result; do not include tokens or HMAC secrets.
-

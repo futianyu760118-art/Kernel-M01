@@ -65,4 +65,3 @@ M01 侧继续使用已有字段：`event_id`、`tenant_id`、`type`、`agent_id`
 - M01 撤销 Agent 后，M01 判权为 `DENY`，HUB 下次刷新能看到撤销状态；
 - secret、完整请求体和个人信息不出现在日志或 Evidence；
 - M01 和 HUB 各自的现有测试通过，并增加注册成功、拒绝、重试/幂等和 scope 收敛测试。
-
