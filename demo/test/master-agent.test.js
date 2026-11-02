@@ -74,7 +74,7 @@ test('master agent: high-risk commands fail closed without approval ticket', asy
 
   const withFakeTicket = await postJson(base, '/kernel/v1/master/command', { tenant_id: 'TENANT_A', command: 'principal.revoke', params: { principal_id: 'P_5002', approval_ticket: 'FAKE-1' } });
   assert.equal(withFakeTicket.data.decision, 'DENY');
-  assert.match(withFakeTicket.data.reason, /not implemented/);
+  assert.match(withFakeTicket.data.reason, /ticket not found/);
   assert.equal(kernel.persons.get('P_5002').status, 'active');
 
   const crossTenant = await postJson(base, '/kernel/v1/master/command', { tenant_id: 'TENANT_B', command: 'system.status', params: {} });

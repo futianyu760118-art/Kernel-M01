@@ -130,6 +130,43 @@ test('OIDC master endpoints require the admin scope in addition to policy scope'
   assert.equal(admin.status, 200);
 });
 
+test('OIDC approval endpoints derive requester, approver, and tenant from verified claims', async (t) => {
+  const kernel = new M01Kernel();
+  kernel.applyM07Event({ event_id: 'approval-owner', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_AUTH', position_id: 'POS_OWNER', seq: 1 });
+  const { server, base } = await startOidc(kernel);
+  t.after(() => server.close());
+
+  const created = await postJson(base, '/kernel/v1/approvals', {
+    tenant_id: 'TENANT_B',
+    requester_id: 'P_SPOOFED',
+    resource: 'master',
+    action: 'principal.revoke',
+    object_id: 'P_5002',
+    parameters: { principal_id: 'P_5002' }
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.data.approval.tenant_id, 'TENANT_A');
+  assert.equal(created.data.approval.requester_id, 'P_AUTH');
+
+  const approvalId = created.data.approval.approval_id;
+  const policyOnlyDecision = await postJson(base, `/kernel/v1/approvals/${approvalId}/decision`, {
+    tenant_id: 'TENANT_A', approver_id: 'P_SPOOFED', decision: 'APPROVE'
+  });
+  assert.equal(policyOnlyDecision.status, 403);
+
+  const approved = await postJson(base, `/kernel/v1/approvals/${approvalId}/decision`, {
+    tenant_id: 'TENANT_B', approver_id: 'P_SPOOFED', decision: 'APPROVE'
+  }, token({ sub: 'P_ADMIN', scope: ['m01:policy:read', 'm01:admin'] }));
+  assert.equal(approved.status, 200);
+  assert.equal(approved.data.approval.decided_by, 'P_ADMIN');
+
+  const list = await fetch(base + '/kernel/v1/approvals?tenant_id=TENANT_B', {
+    headers: { Authorization: `Bearer ${token({ sub: 'P_ADMIN', scope: ['m01:policy:read', 'm01:admin'] })}` }
+  });
+  assert.equal(list.status, 200);
+  assert.equal((await list.json()).approvals[0].tenant_id, 'TENANT_A');
+});
+
 test('unknown modes and production startup without an explicit mode fail closed', () => {
   assert.throws(() => createApp(new M01Kernel(), { mode: 'staging', adminToken: 'should-not-enable-demo' }), /mode/i);
   const previous = process.env.M01_MODE;

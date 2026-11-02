@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 export const HIGH_RISK_ACTIONS = new Set(['data.export', 'payment.execute', 'device.control']);
 
@@ -20,6 +20,18 @@ export const HIGH_RISK_COMMANDS = new Set(['person.offboard', 'agent.revoke', 'p
 const M07_EVENT_TYPES = new Set(['person.hired', 'person.transferred', 'person.offboarded']);
 const M13_EVENT_TYPES = new Set(['agent.registered', 'agent.revoked']);
 
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  }
+  return value;
+}
+
+function parametersHash(parameters = {}) {
+  return createHash('sha256').update(JSON.stringify(canonicalize(parameters))).digest('hex');
+}
+
 export class M01Kernel {
   constructor() {
     this.positions = new Map();
@@ -27,6 +39,7 @@ export class M01Kernel {
     this.agents = new Map();
     this.events = new Map();
     this.revocations = new Map();
+    this.approvals = new Map();
     this.auditLog = [];
     this.master = null;
     this._seedPositions();
@@ -120,11 +133,17 @@ export class M01Kernel {
     if (!owner || owner.status !== 'active') {
       return finish('DENY', 'owner (负责人) is not active');
     }
-    if (HIGH_RISK_COMMANDS.has(command) && !params?.approval_ticket) {
-      return finish('REQUIRE_APPROVAL', 'high-risk command needs maker-checker approval ticket; master agent cannot bypass (fail closed)');
-    }
-    if (params?.approval_ticket) {
-      return finish('DENY', 'approval workflow not implemented in DEMO (501); no valid ticket can exist');
+    if (HIGH_RISK_COMMANDS.has(command)) {
+      const binding = this._masterApprovalBinding(command, params || {});
+      if (!params?.approval_ticket) {
+        return finish('REQUIRE_APPROVAL', 'high-risk command needs maker-checker approval ticket; master agent cannot bypass (fail closed)', { approval_binding: binding });
+      }
+      const consumed = this.consumeApproval({
+        tenant_id,
+        ticket: params.approval_ticket,
+        ...binding
+      });
+      if (!consumed.ok) return finish('DENY', consumed.error);
     }
     const p = params || {};
     const evt = () => 'EVT_MASTER_' + randomUUID();
@@ -158,6 +177,101 @@ export class M01Kernel {
       default:
         return finish('DENY', 'unreachable command branch');
     }
+  }
+
+  _masterApprovalBinding(command, params) {
+    const parameters = { ...params };
+    delete parameters.approval_ticket;
+    const object_id = parameters.person_id || parameters.agent_id || parameters.principal_id || null;
+    return { resource: 'master', action: command, object_id, parameters };
+  }
+
+  _approvalView(approval) {
+    return {
+      approval_id: approval.approval_id,
+      tenant_id: approval.tenant_id,
+      requester_id: approval.requester_id,
+      resource: approval.resource,
+      action: approval.action,
+      object_id: approval.object_id,
+      parameters_hash: approval.parameters_hash,
+      status: approval.status,
+      created_at: approval.created_at,
+      decided_at: approval.decided_at || null,
+      decided_by: approval.decided_by || null,
+      comment: approval.comment || null,
+      consumed_at: approval.consumed_at || null
+    };
+  }
+
+  createApproval({ tenant_id, requester_id, resource, action, object_id, parameters = {} }) {
+    if (!tenant_id || !requester_id || !resource || !action || !object_id) {
+      return { ok: false, status: 400, error: 'required: tenant_id, requester_id, resource, action, object_id' };
+    }
+    const principal = this.persons.get(requester_id) || this.agents.get(requester_id);
+    if (principal && principal.tenant_id !== tenant_id) {
+      return { ok: false, status: 403, error: 'requester tenant boundary violation' };
+    }
+    if (principal && principal.status !== 'active') {
+      return { ok: false, status: 403, error: 'requester is not active' };
+    }
+    const approval = {
+      approval_id: `APR_${randomUUID()}`,
+      tenant_id,
+      requester_id,
+      resource,
+      action,
+      object_id,
+      parameters_hash: parametersHash(parameters),
+      status: 'PENDING',
+      created_at: new Date().toISOString()
+    };
+    this.approvals.set(approval.approval_id, approval);
+    this._audit({ kind: 'approval.requested', trace_id: randomUUID(), ...this._approvalView(approval) });
+    return { ok: true, approval: this._approvalView(approval) };
+  }
+
+  decideApproval({ tenant_id, approval_id, approver_id, decision, comment }) {
+    const approval = this.approvals.get(approval_id);
+    if (!approval) return { ok: false, status: 404, error: 'unknown approval_id' };
+    if (approval.tenant_id !== tenant_id) return { ok: false, status: 403, error: 'approval tenant boundary violation' };
+    if (approval.status !== 'PENDING') return { ok: false, status: 409, error: `approval is already ${approval.status.toLowerCase()}` };
+    if (!approver_id) return { ok: false, status: 400, error: 'required: approver_id' };
+    if (approval.requester_id === approver_id) return { ok: false, status: 403, error: 'requester cannot approve own action' };
+    const normalized = String(decision || '').toUpperCase();
+    if (normalized !== 'APPROVE' && normalized !== 'REJECT') {
+      return { ok: false, status: 400, error: 'decision must be APPROVE or REJECT' };
+    }
+    approval.status = normalized === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+    approval.decided_at = new Date().toISOString();
+    approval.decided_by = approver_id;
+    approval.comment = String(comment || '').slice(0, 500) || null;
+    this._audit({ kind: 'approval.decided', trace_id: randomUUID(), ...this._approvalView(approval) });
+    return { ok: true, approval: this._approvalView(approval) };
+  }
+
+  listApprovals(tenant_id) {
+    return [...this.approvals.values()]
+      .filter((approval) => approval.tenant_id === tenant_id)
+      .map((approval) => this._approvalView(approval));
+  }
+
+  consumeApproval({ tenant_id, ticket, resource, action, object_id, parameters }) {
+    const approval = this.approvals.get(ticket);
+    if (!approval) return { ok: false, error: 'approval ticket not found' };
+    if (approval.tenant_id !== tenant_id) return { ok: false, error: 'approval ticket tenant boundary violation' };
+    if (approval.status === 'CONSUMED') return { ok: false, error: 'approval ticket already consumed' };
+    if (approval.status !== 'APPROVED') return { ok: false, error: `approval ticket is ${approval.status.toLowerCase()}` };
+    if (approval.resource !== resource || approval.action !== action || approval.object_id !== object_id) {
+      return { ok: false, error: 'approval ticket binding mismatch' };
+    }
+    if (approval.parameters_hash !== parametersHash(parameters)) {
+      return { ok: false, error: 'approval ticket parameter binding mismatch' };
+    }
+    approval.status = 'CONSUMED';
+    approval.consumed_at = new Date().toISOString();
+    this._audit({ kind: 'approval.consumed', trace_id: randomUUID(), ...this._approvalView(approval) });
+    return { ok: true };
   }
 
   _qa(options) {

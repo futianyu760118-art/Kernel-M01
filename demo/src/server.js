@@ -189,7 +189,52 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
         }
         const principal = auth.principal;
         if (pathname === '/kernel/v1/approvals' && req.method === 'POST') {
-          send(res, 501, { error: 'approval workflow not implemented in DEMO; high-risk actions stay REQUIRE_APPROVAL / fail closed' });
+          const parsed = parseJson(await readBody(req));
+          if (!parsed.ok) {
+            send(res, 400, { error: 'invalid JSON body' });
+            return;
+          }
+          const body = parsed.data;
+          const result = kernel.createApproval({
+            tenant_id: mode === 'oidc' ? principal.tenant_id : body.tenant_id,
+            requester_id: mode === 'oidc' ? principal.principal_id : body.requester_id,
+            resource: body.resource,
+            action: body.action,
+            object_id: body.object_id,
+            parameters: body.parameters || {}
+          });
+          send(res, result.ok ? 201 : result.status || 400, result.ok ? result : { error: result.error });
+          return;
+        }
+        const approvalDecisionPath = pathname.match(/^\/kernel\/v1\/approvals\/([^/]+)\/decision$/);
+        if (approvalDecisionPath && req.method === 'POST') {
+          if (mode === 'oidc' && !hasScope(principal, adminScope)) {
+            send(res, 403, { error: 'admin scope required to decide approval' });
+            return;
+          }
+          const parsed = parseJson(await readBody(req));
+          if (!parsed.ok) {
+            send(res, 400, { error: 'invalid JSON body' });
+            return;
+          }
+          const body = parsed.data;
+          const result = kernel.decideApproval({
+            tenant_id: mode === 'oidc' ? principal.tenant_id : body.tenant_id,
+            approval_id: decodeURIComponent(approvalDecisionPath[1]),
+            approver_id: mode === 'oidc' ? principal.principal_id : body.approver_id,
+            decision: body.decision,
+            comment: body.comment
+          });
+          send(res, result.ok ? 200 : result.status || 400, result.ok ? result : { error: result.error });
+          return;
+        }
+        if (pathname === '/kernel/v1/approvals' && req.method === 'GET') {
+          if (mode === 'oidc' && !hasScope(principal, adminScope)) {
+            send(res, 403, { error: 'admin scope required to list approvals' });
+            return;
+          }
+          const tenant_id = mode === 'oidc' ? principal.tenant_id : url.searchParams.get('tenant_id') || 'TENANT_A';
+          send(res, 200, { approvals: kernel.listApprovals(tenant_id) });
           return;
         }
         const adminRoute = pathname === '/kernel/v1/status' || pathname === '/kernel/v1/audit' || pathname === '/kernel/v1/revocations';

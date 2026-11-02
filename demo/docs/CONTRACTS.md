@@ -55,7 +55,28 @@ Agent 注册/撤销。字段：`event_id, tenant_id, type(agent.registered|agent
 `{ principal_id, reason }` → 立即撤权：人员撤销级联其全部 Agent；Agent 撤销级联子 Agent。撤权后所有决策端 DENY。
 
 ### POST /kernel/v1/approvals
-**501 Not Implemented**（台账 R08）：DEMO 未实现 maker-checker 审批票据，高风险动作保持 REQUIRE_APPROVAL / fail-closed。
+创建 maker-checker 审批票据。DEMO 中票据保存在内存，正式版须迁移到 M01 持久化存储并接入 M02/EDP 审计证据。
+
+请求：
+
+```json
+{
+  "tenant_id": "TENANT_A",
+  "requester_id": "P_REQUESTER",
+  "resource": "master",
+  "action": "principal.revoke",
+  "object_id": "P_5002",
+  "parameters": { "principal_id": "P_5002" }
+}
+```
+
+响应 201：返回 `approval_id`、`PENDING` 状态和 `parameters_hash`。OIDC 模式下 `tenant_id` 与 `requester_id` 必须从已验证 Principal 推导，忽略请求体中的同名身份字段。
+
+### POST /kernel/v1/approvals/:approval_id/decision
+审批或拒绝票据：`{ tenant_id, approver_id, decision: "APPROVE"|"REJECT", comment? }`。申请人不得审批自己的票据；OIDC 模式下审批人由 Token 推导，并要求 `m01:admin`。
+
+### GET /kernel/v1/approvals
+按租户查询审批台账。DEMO 可用 `?tenant_id=TENANT_A`，OIDC 模式下租户由 Token 推导并要求 `m01:admin`。
 
 ### POST /kernel/v1/master/say（负责人 ⇄ 总控 Agent 自然语言对话）
 `{ tenant_id, text }` → 对话式指令（交互范式移植自 multica Mika 总控智能体 quick_actions 协议）：
@@ -88,7 +109,7 @@ Agent 注册/撤销。字段：`event_id, tenant_id, type(agent.registered|agent
 | capabilities.query / authorize.check | principal_id[, resource, action] | POMS 通道查询/判权 |
 | system.status / audit.tail | [limit] | 系统观测 |
 
-**红线**：高风险指令（▲）必须持批准票据，DEMO 审批为 501 → 无票据 `REQUIRE_APPROVAL` 不执行、持票据 `DENY`（总控不能绕过 maker-checker）；总控被撤权后一切指令 DENY；跨租户指令 DENY；每条指令独立 trace_id 进审计（`master.command`）。
+**红线**：高风险指令（▲）必须持与租户、动作、对象和参数摘要完全匹配的批准票据；无票据 `REQUIRE_APPROVAL`，票据缺失/未批准/已消费/绑定不匹配均 `DENY`（总控不能绕过 maker-checker）；总控被撤权后一切指令 DENY；跨租户指令 DENY；每条指令独立 trace_id 进审计（`master.command`）。
 
 ### GET /kernel/v1/status | GET /kernel/v1/audit
 运行状态摘要 / 最近 100 条审计记录（均需管理令牌）。
@@ -98,4 +119,4 @@ Agent 注册/撤销。字段：`event_id, tenant_id, type(agent.registered|agent
 - 高风险清单：`data.export`、`payment.execute`、`device.control`。
 
 ## 4. 已知边界（不得视为生产契约）
-内存存储、无时间戳/nonce 防重放（R05）、单管理令牌（R01）、无 OIDC/MFA、无 M02 Outbox（R06）、审批 501（R08）、ABAC 简化（R09）。
+内存存储、无时间戳/nonce 防重放（R05）、单管理令牌（R01）、无 M02 Outbox（R06）、审批票据尚未持久化（R08）、ABAC 简化（R09）。
