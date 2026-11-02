@@ -59,6 +59,12 @@ test('M07 hire -> POMS capabilities -> M13 agent -> offboard revokes person and 
   assert.equal(duplicateAgent.data.idempotent, true);
   assert.equal(duplicateAgent.data.agent.agent_id, 'A_MAIN_1001');
   assert.equal(duplicateAgent.data.agent.status, 'active');
+  assert.equal(duplicateAgent.data.idempotency_key, 'EVT-A-001');
+
+  const statusBody = JSON.stringify({ tenant_id: 'TENANT_A', agent_id: 'A_MAIN_1001' });
+  const agentStatus = await postJson(base, '/integrations/m13/status', JSON.parse(statusBody), { 'X-M01-Signature': `sha256=${sign(M13_SECRET, statusBody)}` });
+  assert.equal(agentStatus.status, 200);
+  assert.equal(agentStatus.data.agent.status, 'active');
 
   const agentAllow = await postJson(base, '/kernel/v1/authorize', { tenant_id: 'TENANT_A', principal_id: 'A_MAIN_1001', resource: 'task', action: 'execute' }, adminHeaders);
   assert.equal(agentAllow.data.decision, 'ALLOW');

@@ -637,6 +637,7 @@ export class M01Kernel {
         ok: true,
         idempotent: true,
         event_id,
+        idempotency_key: event.idempotency_key || event_id,
         applied: false,
         ...(existingAgent ? { agent: this._agentView(existingAgent), clamped_scopes: [] } : {}),
       };
@@ -669,7 +670,7 @@ export class M01Kernel {
         authz_version: 1
       });
       this._audit({ kind: 'm13.agent.registered', event_id, agent_id: event.agent_id, owner_person_id: event.owner_person_id, parent_agent_id: event.parent_agent_id || null, scopes, clamped_scopes: clamped });
-      return { ok: true, idempotent: false, applied: true, agent: this._agentView(this.agents.get(event.agent_id)), clamped_scopes: clamped };
+      return { ok: true, idempotent: false, applied: true, event_id, idempotency_key: event.idempotency_key || event_id, agent: this._agentView(this.agents.get(event.agent_id)), clamped_scopes: clamped };
     }
 
     if (event.type === 'agent.revoked') {

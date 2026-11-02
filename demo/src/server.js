@@ -256,7 +256,8 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
           return;
         }
         const raw = await readBody(req);
-        const secret = pathname === '/integrations/m07' ? m07Secret : pathname === '/integrations/m13' ? m13Secret : null;
+        const isM13Status = pathname === '/integrations/m13/status';
+        const secret = pathname === '/integrations/m07' ? m07Secret : (pathname === '/integrations/m13' || isM13Status) ? m13Secret : null;
         if (!secret) {
           send(res, 404, { error: 'unknown integration' });
           return;
@@ -268,6 +269,21 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
         const parsed = parseJson(raw);
         if (!parsed.ok) {
           send(res, 400, { error: 'invalid JSON body' });
+          return;
+        }
+        if (isM13Status) {
+          const tenantId = parsed.data.tenant_id;
+          const agentId = parsed.data.agent_id;
+          if (!tenantId || !agentId) {
+            send(res, 400, { error: 'required: tenant_id, agent_id' });
+            return;
+          }
+          const agent = kernel.status().agents.find((item) => item.agent_id === agentId && item.tenant_id === tenantId);
+          if (!agent) {
+            send(res, 404, { error: 'unknown agent_id' });
+            return;
+          }
+          send(res, 200, { ok: true, agent });
           return;
         }
         const beforeState = snapshotBeforeMutation();
