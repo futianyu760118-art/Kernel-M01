@@ -137,3 +137,13 @@ test('人员主名单隐藏离职人员，并提供单独名单和配备清单',
   assert.match(html, /renderPersonInventory/);
   assert.match(html, /activePeople/);
 });
+
+test('最近决策区域严格使用通俗语言，不展示内部决策字段', () => {
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /最近办理结果/);
+  assert.match(html, /decisionLabel\(d\.decision\)/);
+  assert.match(html, /decisionActionLabel/);
+  assert.match(html, /decisionReasonLabel/);
+  assert.doesNotMatch(html, /<dt>Trace<\/dt>/);
+  assert.doesNotMatch(html, /\$\('vAction'\)\.textContent = d\.resource/);
+});

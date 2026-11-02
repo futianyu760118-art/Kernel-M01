@@ -729,13 +729,12 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
     </div>
     <div class="row1">
       <div class="card">
-        <h3>最近决策</h3>
-        <div id="verdict" class="verdict idle">—</div>
+        <h3>最近办理结果</h3>
+        <div id="verdict" class="verdict idle">暂无结果</div>
         <dl class="kv">
-          <dt>主体</dt><dd id="vPrincipal">-</dd>
-          <dt>动作</dt><dd id="vAction">-</dd>
-          <dt>理由</dt><dd id="vReason">发起一次判权以查看结果</dd>
-          <dt>Trace</dt><dd id="vTrace" class="mono">-</dd>
+          <dt>办理人员</dt><dd id="vPrincipal">暂无</dd>
+          <dt>办理事项</dt><dd id="vAction">暂无</dd>
+          <dt>说明</dt><dd id="vReason">进行一次权限检查后显示结果</dd>
         </dl>
       </div>
       <div class="card">
@@ -945,6 +944,35 @@ function positionLabel(id) { return HUMAN_POSITIONS[id] || id || '未分配岗�
 function statusLabel(value) { return HUMAN_STATUS[value] || value || '未知'; }
 function decisionLabel(value) {
   return ({ EXECUTED: '已完成', REQUIRE_APPROVAL: '等待审批', DENY: '未办理', ALLOW: '允许办理' })[value] || value || '未处理';
+}
+function decisionActionLabel(resource, action) {
+  if (!resource || !action) return '暂无事项';
+  return ({
+    'task:execute': '办理日常工作',
+    'report:read': '查看报表',
+    'report:approve': '审批报表',
+    'data:export': '导出数据',
+    'device:control': '操作设备',
+    'payment:execute': '执行付款'
+  })[`${resource || ''}:${action || ''}`] || '办理事项';
+}
+function decisionPrincipalLabel(id) {
+  if (!id) return '暂无人员';
+  if (String(id).startsWith('A_')) return '智能助手';
+  const person = currentPeople.find((item) => item.person_id === id);
+  return person ? personLabel(person) : '当前人员';
+}
+function decisionReasonLabel(reason, decision) {
+  const text = String(reason || '').toLowerCase();
+  if (text.includes('high-risk') || text.includes('approval')) return '这项操作需要管理员审批。';
+  if (text.includes('capability grant') || decision === 'ALLOW') return '按照岗位权限，可以办理。';
+  if (text.includes('tenant') || text.includes('cross')) return '不能跨单位办理。';
+  if (text.includes('not active') || text.includes('revoked')) return '当前人员或智能助手已停用。';
+  if (text.includes('binding mismatch')) return '审批内容和办理内容不一致。';
+  if (text.includes('not found')) return '找不到对应的审批记录。';
+  if (decision === 'DENY') return '当前不允许办理。';
+  if (decision === 'EXECUTED') return '办理已经完成。';
+  return '结果已记录。';
 }
 function commandLabel(value) {
   return ({
@@ -1271,12 +1299,11 @@ function renderDecision(d) {
   const v = $('verdict');
   v.textContent = decisionLabel(d.decision);
   v.className = 'verdict ' + (d.decision || 'idle');
-  $('vPrincipal').textContent = d.principal_id || '-';
-  $('vAction').textContent = d.resource ? `${d.resource}:${d.action}` : '-';
-  $('vReason').textContent = d.reason || '-';
-  $('vTrace').textContent = d.trace_id || '-';
+  $('vPrincipal').textContent = decisionPrincipalLabel(d.principal_id);
+  $('vAction').textContent = decisionActionLabel(d.resource, d.action);
+  $('vReason').textContent = decisionReasonLabel(d.reason, d.decision);
   if (d.resource === 'task' && d.action === 'execute') {
-    setFlowState('flowAuthState', d.decision, d.decision === 'ALLOW' ? 'done' : d.decision === 'DENY' ? 'deny' : 'review');
+    setFlowState('flowAuthState', decisionLabel(d.decision), d.decision === 'ALLOW' ? 'done' : d.decision === 'DENY' ? 'deny' : 'review');
   }
   if (d.decision === 'REQUIRE_APPROVAL') setFlowState('flowApprovalState', '待审批', 'review');
 }
