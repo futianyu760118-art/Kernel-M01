@@ -555,6 +555,14 @@ export function start() {
     await new Promise((resolveListen) => server.listen(port, host, resolveListen));
     console.log(`[M01] listening on http://${host}:${port} (mode=${configuredMode}, persistence=${persistence ? 'postgres' : 'memory'})`);
   })();
+  const shutdown = async () => {
+    try { await persistence?.close(); } finally {
+      if (server.listening) server.close(() => process.exit(0));
+      else process.exit(0);
+    }
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
   return server;
 }
 

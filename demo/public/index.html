@@ -530,22 +530,27 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
             <code>linked / ambiguous / unlinked</code>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">4</span><strong>查询能力</strong><span class="flow-state" id="flowCapsState">待操作</span></div>
+            <div class="flow-step-title"><span class="flow-number">4</span><strong>注册总控</strong><span class="flow-state" id="flowMasterState">待操作</span></div>
+            <p>OIDC 登录后绑定已导入的 Owner；正式模式不自动创建负责人或恢复已撤销总控。</p>
+            <button type="button" class="flow-action" data-action="masterRegister">注册/恢复总控</button>
+          </li>
+          <li class="flow-step">
+            <div class="flow-step-title"><span class="flow-number">5</span><strong>查询能力</strong><span class="flow-state" id="flowCapsState">待操作</span></div>
             <p>输入人员 ID，先查询 M01 根据岗位计算出的能力清单。</p>
             <button type="button" class="flow-action" data-action="caps">查询当前人员能力</button>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">5</span><strong>判权执行</strong><span class="flow-state" id="flowAuthState">待操作</span></div>
+            <div class="flow-step-title"><span class="flow-number">6</span><strong>判权执行</strong><span class="flow-state" id="flowAuthState">待操作</span></div>
             <p>普通动作先判权；后端返回 ALLOW 才允许业务系统执行。</p>
             <button type="button" class="flow-action" data-action="authTask">测试 task:execute</button>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">6</span><strong>高风险审批</strong><span class="flow-state review" id="flowApprovalState">需票据</span></div>
+            <div class="flow-step-title"><span class="flow-number">7</span><strong>高风险审批</strong><span class="flow-state review" id="flowApprovalState">需票据</span></div>
             <p>撤权、离职、导出等高风险动作必须申请、审批和一次性消费票据。</p>
             <code>POST /kernel/v1/approvals</code>
           </li>
           <li class="flow-step">
-            <div class="flow-step-title"><span class="flow-number">7</span><strong>审计闭环</strong><span class="flow-state" id="flowAuditState">待操作</span></div>
+            <div class="flow-step-title"><span class="flow-number">8</span><strong>审计闭环</strong><span class="flow-state" id="flowAuditState">待操作</span></div>
             <p>每次判权、审批和执行都要能通过 trace_id 追踪和复核。</p>
             <button type="button" class="flow-action" data-action="refreshAudit">拉取审计</button>
           </li>
@@ -1026,9 +1031,11 @@ const actions = {
         }, headers());
     log('MASTER注册', r.data, r.ok ? 'EXECUTED' : 'DENY');
         if (r.ok) {
+              setFlowState('flowMasterState', r.data.idempotent ? '已恢复' : '已注册', 'done');
           toast(r.data.idempotent ? '总控 Agent 已恢复' : '总控 Agent 已注册', 'success');
           await actions.refreshStatus();
         } else {
+              setFlowState('flowMasterState', '失败/需重试', 'deny');
           toast(`总控注册失败：${r.data.error || `HTTP ${r.status}`}`, 'error');
         }
   },

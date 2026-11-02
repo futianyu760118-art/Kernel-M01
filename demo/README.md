@@ -1,17 +1,18 @@
-# AEOS M01 Kernel DEMO（开发说明）
+# AEOS M01 Kernel（第一阶段控制面）
 
-M01 第一阶段 MVP 可运行 DEMO：统一人员/组织/岗位/Agent 的身份与授权决策（RBAC 基线 + 简化 ABAC + Guard + 撤权 + 内存审计），内置**总控 Agent（A_MASTER_KERNEL）**作为负责人指令的唯一执行者，统管 M07 人事、M13 Agent、POMS 判权与系统观测通道。
+M01 是 AEOS 第一阶段的系统级总控与身份控制面：统一人员/组织/岗位/Agent 的身份与授权决策（RBAC 基线 + 简化 ABAC + Guard + 撤权 + 审批 + 审计），内置**总控 Agent（A_MASTER_KERNEL）**作为负责人指令的唯一执行者，统管 M07 人事、M13 Agent、POMS 判权与系统观测通道。
 
-**状态：DEMO ONLY / 证据等级 L2**（本地自动化契约测试），对应归档 `docs/archive/06_现有DEMO证据与复现说明.md`。M07/M13/POMS 真实环境联调（L3/L4）尚未完成，不得作为生产系统使用。
+**正式部署边界：** PostgreSQL 持久化 + Keycloak OIDC/PKCE + M07/M13 HMAC。`M01_MODE=demo` 只用于本地验证；生产必须显式使用 `M01_MODE=oidc`。
 
 ## 目录结构
 
 ```
 demo/
-  src/server.js           # Node.js HTTP API：开发 Bearer/OIDC、M07/M13 HMAC 入站、授权/审批/撤权/状态接口
-  src/kernel.js           # 内存身份与岗位、Agent、Guard 决策、审批票据、撤权状态机、内存审计
-  public/index.html       # 开发管理页面（浏览器直连演示）
-  test/*.test.js          # 本地自动化契约测试（node:test，零依赖）
+  src/server.js           # Node.js HTTP API：OIDC、M07/M13 HMAC、授权/审批/撤权/状态接口
+  src/kernel.js           # 控制面读模型、Guard 决策、审批票据、撤权状态机、审计
+  src/postgres-store.js   # PostgreSQL 迁移、快照、版本冲突与审计持久化
+  public/index.html       # OIDC PKCE 控制台与系统操作流程
+  test/*.test.js          # node:test 契约、OIDC 和持久化测试
   docs/CONTRACTS.md       # 候选接口契约（L1）
   src/legacy-import.js    # EBMS 人员导入、账号冲突识别、筛选和幂等迁移
   scripts/import-ebms-personnel.mjs # 使用真实 EBMS 数据做导入/筛选/授权验证
@@ -22,7 +23,8 @@ demo/
 
 ## 环境要求
 
-- Node.js >= 20（零 npm 运行时第三方依赖）。
+- Node.js >= 20
+- Docker / Docker Compose（正式部署）
 
 ## 快速开始
 
@@ -38,7 +40,7 @@ node scripts/import-ebms-personnel.mjs --account=linked
 # 按组织筛选并限制测试样本
 node scripts/import-ebms-personnel.mjs --department=研发中心 --limit=3
 
-# 让 M01 DEMO 启动时加载 EBMS 人员（PowerShell）
+# 本地 DEMO 启动（必须显式声明 DEMO）
 $env:M01_MODE='demo'
 $env:M01_EBMS_SOURCE_DIR='..\..\EBMS-aeos-phase1\database\database'
 npm start
@@ -46,7 +48,7 @@ npm start
 
 - Windows：双击/执行 `start_windows.bat`（先测试后启动）。
 - 端口占用时：先停止占用 3101 的程序，或在 `.env` 中改 `PORT`。
-- Docker：`cp .env.example .env`（替换全部密钥）→ `docker compose up --build`。
+- Docker：复制 `.env.example` 为 `.env`，替换全部密钥和 OIDC 配置，再执行 `docker compose up -d --build`；详细流程见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)。
 
 ## 环境变量
 
@@ -54,9 +56,14 @@ npm start
 |---|---|---|
 | PORT | 3101 | 监听端口 |
 | HOST | 0.0.0.0 | 监听地址 |
+| M01_MODE | demo | `demo` 仅本地；正式环境必须为 `oidc` |
+| M01_DATABASE_URL | — | PostgreSQL 连接串；正式模式必填 |
 | M01_ADMIN_TOKEN | local-demo-admin | 开发管理令牌（仅限本机 DEV） |
 | M07_WEBHOOK_SECRET | local-demo-m07-secret | M07 Webhook HMAC 密钥 |
 | M13_WEBHOOK_SECRET | local-demo-m13-secret | M13 Webhook HMAC 密钥（独立轮换） |
+| M01_OIDC_ISSUER / AUDIENCE / JWKS_URI | — | 正式 OIDC 校验配置 |
+| M01_OIDC_CLIENT_ID / REDIRECT_URI | — | 正式浏览器 PKCE 配置 |
+| M01_EXTERNAL_IDENTITIES_JSON | — | Keycloak `sub` 到 M01 Person/Agent 的映射 |
 
 ## 本地演示链路（对应页面按钮）
 
@@ -74,28 +81,30 @@ npm start
 - `linked_user_id` 优先；缺失时才按姓名匹配。多账号同名会标记 `AMBIGUOUS_LOGIN_ACCOUNT`，不自动绑定。
 - 旧岗位默认映射到最低权限 `POS_STAFF`；明确包含经理/主管/主任/总监/部长/厂长/负责人时才映射 `POS_MANAGER`，其余进入 `POSITION_NOT_MAPPED` 复核清单。
 - 导入使用稳定事件 ID，重复执行幂等；重复导入不能恢复已经撤销的人员。
-- 设置 `M01_EBMS_SOURCE_DIR` 后，M01 服务启动前加载人员；可用 `M01_EBMS_IMPORT_STATUS`、`M01_EBMS_IMPORT_ACCOUNT`、`M01_EBMS_IMPORT_DEPARTMENT` 缩小启动导入范围。该启动导入仍是内存 DEMO，重启会重新从源数据导入。
+- 设置 `M01_EBMS_SOURCE_DIR` 后，M01 服务启动前加载人员；可用 `M01_EBMS_IMPORT_STATUS`、`M01_EBMS_IMPORT_ACCOUNT`、`M01_EBMS_IMPORT_DEPARTMENT` 缩小启动导入范围。导入结果写入 PostgreSQL，重复导入幂等，重启不会丢失控制面状态。
 
 ## 运行检查（对应归档 07 手册）
 
-- [x] `npm test`：11/11 通过（含审批票据闭环、归档基线和总控 Agent）。
+- [x] `npm test`：37/37 通过（含审批、OIDC、PKCE、持久化服务契约和总控 Agent）。
+- [x] `npm run test:postgres`：3/3 通过（PostgreSQL 迁移、恢复和版本冲突）。
+- [x] Docker smoke：`/health`、`/readyz`、147 条 EBMS 人员、总控和 HUB Agent 重启恢复。
 - [x] `GET /health` 返回 `status: ok`。
 - [x] 页面可访问，接口需服务端令牌。
 - [x] 可完成本地 M07→POMS→M13→撤权链路。
-- [x] 安全状态显式标注 `DEMO ONLY`。
+- [x] DEMO 与 OIDC 模式显式区分，正式页面不暴露默认管理 Token。
 
 - 顶栏色板可切换系统主题（午夜蓝/紫罗兰/洋红/青金/晨雾白 5 套预设 + 取色盘**任意自定义色**：单色自动推导整套主题，自动避开决策语义色区间），选择记忆在浏览器本地。
 
 ## 安全约束（红线）
 
-- `local-demo-admin` 等默认令牌**禁止**用于公网或共享网络；生产必须 OIDC + 最小权限 + MFA。
-- 内存存储，重启丢失；不可用于真实授权、资金或设备控制。
-- `principal_id` 取自请求 Body 仅限 MVP；正式版必须由已验证 JWT claim 与服务端上下文推导（R07）。
+- `local-demo-admin` 等默认值**禁止**用于公网或共享网络；生产必须 OIDC + 最小权限 + MFA。
+- 生产状态必须使用 PostgreSQL；禁止用 `docker compose down -v` 做普通回滚。
+- 正式 OIDC 请求的主体由签名 Token 和 M01 外部身份映射推导，不信任请求体中的 `principal_id`、`tenant_id` 或用户身份字段。
 - `.env`、真实令牌、个人信息不得提交仓库或证据包。
-- Webhook 现无时间戳/nonce 防重放（R05）；正式版须 mTLS/短期凭据/重放窗。
+- M07/M13 入站保持独立 HMAC；事件使用稳定幂等键，生产仍应结合 HTTPS、密钥轮换和重放监控。
 
 ## 与归档文档的关系
 
 - 执行归档见 `../docs/archive/`（00–07）。
 - 接口候选契约见 `docs/CONTRACTS.md`（L1，非现网事实）。
-- 生产化差距（审批持久化、OIDC/MFA 集成、Outbox、分布式撤权等）见归档 02/05；本 DEMO 已提供内存审批闭环，但仍不得用于生产。
+- 生产化发布前仍需完成 Keycloak Realm/Client 签批、HTTPS/WAF、密钥轮换、备份恢复和 Owner/外部身份映射签批；本地 DEMO 不得直接暴露公网。

@@ -45,4 +45,18 @@
 - RED: OIDC formal contract tests failed for missing public config, missing external-identity mapping, and the DEMO-token console.
 - GREEN: added public OIDC configuration, external `issuer + sub` mapping with tenant enforcement, formal startup checks, Authorization Code + PKCE browser flow with in-memory access Token, and removed static DEMO/HMAC defaults from HTML.
 - Verification: `demo/npm test` passed 37/37, including formal OIDC contract tests.
+- Commit: `4cbeed8 feat(m01): enforce oidc for formal control-plane access`.
+
+## Task 5: complete
+
+- RED: the HUB bridge had stable event retry behavior but no explicit idempotency-key field or signed M01 Agent status contract.
+- GREEN: M01 M13 responses now echo `idempotency_key`; `POST /integrations/m13/status` returns tenant-scoped Agent state under M13 HMAC; HUB persists and validates idempotency metadata while retaining pending/rejected fail-closed behavior.
+- Verification: M01 `npm test` passed 37/37; HUB type check, M01 bridge/registration/console tests and full `npm test` passed.
+- Commits: M01 `7658794 feat(m01): expose signed agent status for hub recovery`; HUB `34989dd feat(hub): persist M01 idempotency metadata`.
+
+## Task 6: complete
+
+- RED: Docker previously had no durable PostgreSQL service, no migration files in the image, and health checks did not wait for persistence readiness.
+- GREEN: added PostgreSQL named volume/health dependency, production image dependency installation and migration copy, formal OIDC environment contract, `/readyz` smoke command, graceful shutdown, and updated operations/README/UI flow documentation.
+- Verification: Docker image built; PostgreSQL and M01 containers healthy; `/health` and `/readyz` passed; 147 EBMS personnel loaded; total control and HUB Agent registered; restart preserved 148 control-plane persons, 2 Agents, active master and audit entries; smoke passed after restart.
 - Commit: pending in this task completion step.

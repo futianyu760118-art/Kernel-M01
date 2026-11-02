@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "smoke:docker": "node scripts/smoke.mjs",
     "test": "node --test test/integration.test.js test/master-agent.test.js test/master-say.test.js test/approvals.test.js test/legacy-import.test.js test/state-schema.test.js test/persistence-server.test.js test/oidc.test.js test/oidc-formal.test.js",
     "test:postgres": "node --test test/postgres-store.test.js"
   },
