@@ -560,10 +560,15 @@ export class M01Kernel {
     }
     if (this.events.has(event_id)) {
       this._audit({ kind: 'm13.event.duplicate', event_id, result: 'ignored' });
-      return { ok: true, idempotent: true, event_id, applied: false };
+      const existingAgent = this.agents.get(event.agent_id);
+      return {
+        ok: true,
+        idempotent: true,
+        event_id,
+        applied: false,
+        ...(existingAgent ? { agent: this._agentView(existingAgent), clamped_scopes: [] } : {}),
+      };
     }
-    this.events.set(event_id, { source: 'm13', type: event.type, at: new Date().toISOString() });
-
     if (event.type === 'agent.registered') {
       const owner = this.persons.get(event.owner_person_id);
       if (!owner || owner.status !== 'active' || owner.tenant_id !== event.tenant_id) {
@@ -581,6 +586,7 @@ export class M01Kernel {
         scopes = requested.filter((s) => allowed.has(s));
         clamped = requested.filter((s) => !allowed.has(s));
       }
+      this.events.set(event_id, { source: 'm13', type: event.type, at: new Date().toISOString() });
       this.agents.set(event.agent_id, {
         agent_id: event.agent_id,
         tenant_id: event.tenant_id,
@@ -599,6 +605,7 @@ export class M01Kernel {
       if (!agent) {
         return { ok: false, error: 'unknown agent_id', status: 404 };
       }
+      this.events.set(event_id, { source: 'm13', type: event.type, at: new Date().toISOString() });
       const trace_id = randomUUID();
       const affected = this._revokeAgentCascade(event.agent_id, 'agent revoked', trace_id);
       this._audit({ kind: 'm13.agent.revoked', event_id, agent_id: event.agent_id, cascaded: affected.length > 1, trace_id });

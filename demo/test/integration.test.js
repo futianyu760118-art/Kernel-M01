@@ -54,6 +54,12 @@ test('M07 hire -> POMS capabilities -> M13 agent -> offboard revokes person and 
   assert.equal(agent.status, 200);
   assert.deepEqual(agent.data.agent.scopes, ['task:execute']);
 
+  const duplicateAgent = await postJson(base, '/integrations/m13', JSON.parse(agentBody), { 'X-M01-Signature': `sha256=${sign(M13_SECRET, agentBody)}` });
+  assert.equal(duplicateAgent.status, 200);
+  assert.equal(duplicateAgent.data.idempotent, true);
+  assert.equal(duplicateAgent.data.agent.agent_id, 'A_MAIN_1001');
+  assert.equal(duplicateAgent.data.agent.status, 'active');
+
   const agentAllow = await postJson(base, '/kernel/v1/authorize', { tenant_id: 'TENANT_A', principal_id: 'A_MAIN_1001', resource: 'task', action: 'execute' }, adminHeaders);
   assert.equal(agentAllow.data.decision, 'ALLOW');
 
@@ -103,6 +109,26 @@ test('M07 duplicate event_id is idempotent and does not re-apply', async (t) => 
   const third = await postJson(base, '/integrations/m07', event, headers);
   assert.equal(third.data.idempotent, true);
   assert.equal(kernel.events.size, eventsBefore);
+});
+
+test('rejected M13 registration can be retried with the same event after owner activation', async (t) => {
+  const { server, base } = await startServer();
+  t.after(() => server.close());
+
+  const event = { event_id: 'EVT-RETRY-M13-1', tenant_id: 'TENANT_A', type: 'agent.registered', agent_id: 'A_RETRY_1001', owner_person_id: 'P_RETRY_1001', scopes: ['task:execute'] };
+  const raw = JSON.stringify(event);
+  const rejected = await postJson(base, '/integrations/m13', event, { 'X-M01-Signature': `sha256=${sign(M13_SECRET, raw)}` });
+  assert.equal(rejected.status, 403);
+
+  const hire = { event_id: 'EVT-RETRY-M07-1', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_RETRY_1001', position_id: 'POS_STAFF', seq: 1 };
+  const hireRaw = JSON.stringify(hire);
+  const hired = await postJson(base, '/integrations/m07', hire, { 'X-M01-Signature': `sha256=${sign(M07_SECRET, hireRaw)}` });
+  assert.equal(hired.status, 200);
+
+  const retried = await postJson(base, '/integrations/m13', event, { 'X-M01-Signature': `sha256=${sign(M13_SECRET, raw)}` });
+  assert.equal(retried.status, 200);
+  assert.equal(retried.data.idempotent, false);
+  assert.equal(retried.data.agent.agent_id, 'A_RETRY_1001');
 });
 
 test('HMAC tampering on M07/M13 webhooks is rejected with 401', async (t) => {
