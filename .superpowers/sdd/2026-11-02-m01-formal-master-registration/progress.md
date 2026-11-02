@@ -59,4 +59,11 @@
 - RED: Docker previously had no durable PostgreSQL service, no migration files in the image, and health checks did not wait for persistence readiness.
 - GREEN: added PostgreSQL named volume/health dependency, production image dependency installation and migration copy, formal OIDC environment contract, `/readyz` smoke command, graceful shutdown, and updated operations/README/UI flow documentation.
 - Verification: Docker image built; PostgreSQL and M01 containers healthy; `/health` and `/readyz` passed; 147 EBMS personnel loaded; total control and HUB Agent registered; restart preserved 148 control-plane persons, 2 Agents, active master and audit entries; smoke passed after restart.
-- Commit: pending in this task completion step.
+- Commit: `d87fb5d deploy(m01): add durable formal control-plane stack`.
+
+## Task 7: complete
+
+- M01 final verification: `npm test` 37/37, `npm run test:postgres` 3/3, Docker smoke passed.
+- HUB final verification: TypeScript check passed; M01 bridge 9/9; registration 4/4; console contract 2/2; full HUB test suite passed earlier in the same task.
+- Repository verification: `git diff --check` clean in both M01 and HUB; no untracked or unstaged changes remain in either repository.
+- Deployment evidence: `demo` Compose stack is running with `aeos-m01-kernel` and `aeos-m01-postgres` healthy; restart recovery confirmed.
