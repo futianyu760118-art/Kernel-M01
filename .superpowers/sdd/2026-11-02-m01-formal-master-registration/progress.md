@@ -25,3 +25,10 @@
 - GREEN: explicit registration button, registration response contract, refresh-on-success and idempotent active registration implemented.
 - Verification: focused tests passed 8/8; `demo/npm test` passed 16/16.
 - Commit: pending in this task completion step.
+
+## Task 2: complete
+
+- RED: formal Owner/revocation and state round-trip tests failed as expected; the state module was initially missing.
+- GREEN: added `KernelStateV1` validation, export/restore, formal Owner requirements, fixed Master ID and revoked-master guard.
+- Verification: focused tests passed 7/7; `demo/npm test` passed 18/18.
+- Ruling: the existing DEMO behavior still permits implicit Owner creation and re-registering a revoked master so legacy local flows remain compatible; formal mode disables both behaviors as required by the spec.

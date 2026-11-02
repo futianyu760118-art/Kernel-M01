@@ -105,3 +105,29 @@ test('master agent: revoking the master agent stops all command execution; re-re
   assert.equal(cmd2.data.decision, 'EXECUTED');
   assert.ok(cmd2.data.output.persons >= 1);
 });
+
+test('formal master registration requires an existing active owner and cannot revive a revoked master', () => {
+  const kernel = new M01Kernel({ allowImplicitOwner: false });
+  const missingOwner = kernel.registerMaster({ tenant_id: 'TENANT_A', owner_person_id: 'P_OWNER' });
+  assert.equal(missingOwner.status, 403);
+  assert.match(missingOwner.error, /owner person must already exist/i);
+
+  const hired = kernel.applyM07Event({ event_id: 'FORMAL_OWNER_1', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_OWNER', position_id: 'POS_OWNER', seq: 1 });
+  assert.equal(hired.ok, true);
+  const registered = kernel.registerMaster({ tenant_id: 'TENANT_A', owner_person_id: 'P_OWNER', master_agent_id: 'A_MASTER_KERNEL', idempotency_key: 'TENANT_A:P_OWNER:A_MASTER_KERNEL' });
+  assert.equal(registered.state, 'active');
+  assert.equal(registered.idempotent, false);
+
+  const revoked = kernel.revoke('A_MASTER_KERNEL', 'formal test revoke');
+  assert.equal(revoked.revoked, true);
+  const restored = kernel.registerMaster({ tenant_id: 'TENANT_A', owner_person_id: 'P_OWNER', master_agent_id: 'A_MASTER_KERNEL', idempotency_key: 'TENANT_A:P_OWNER:A_MASTER_KERNEL' });
+  assert.equal(restored.status, 403);
+  assert.match(restored.error, /revoked/i);
+});
+
+test('master registration rejects a caller-selected master agent id', () => {
+  const kernel = new M01Kernel();
+  const result = kernel.registerMaster({ tenant_id: 'TENANT_A', owner_person_id: 'P_OWNER', master_agent_id: 'A_OTHER' });
+  assert.equal(result.status, 400);
+  assert.match(result.error, /A_MASTER_KERNEL/);
+});

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { KernelStateVersion, parseKernelState } from './state-schema.js';
 
 export const HIGH_RISK_ACTIONS = new Set(['data.export', 'payment.execute', 'device.control']);
 
@@ -33,7 +34,8 @@ function parametersHash(parameters = {}) {
 }
 
 export class M01Kernel {
-  constructor() {
+  constructor({ allowImplicitOwner = true } = {}) {
+    this.allowImplicitOwner = allowImplicitOwner;
     this.positions = new Map();
     this.persons = new Map();
     this.agents = new Map();
@@ -86,6 +88,9 @@ export class M01Kernel {
     }
     let owner = this.persons.get(owner_person_id);
     if (!owner) {
+      if (!this.allowImplicitOwner) {
+        return { ok: false, error: 'owner person must already exist and be active in formal mode', status: 403 };
+      }
       owner = { person_id: owner_person_id, tenant_id, status: 'active', position_id: 'POS_OWNER', seq: 0, authz_version: 1 };
       this.persons.set(owner_person_id, owner);
     }
@@ -106,6 +111,9 @@ export class M01Kernel {
         master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: existingMaster.authz_version, commands: existingMaster.scopes }
       };
     }
+    if (existingMaster?.status === 'revoked' && !this.allowImplicitOwner) {
+      return { ok: false, error: 'master agent is revoked and cannot be restored by registration', status: 403 };
+    }
     const masterAuthzVersion = Number.isInteger(existingMaster?.authz_version) && existingMaster.authz_version > 0
       ? existingMaster.authz_version
       : 1;
@@ -122,6 +130,32 @@ export class M01Kernel {
     const trace_id = randomUUID();
     this._audit({ kind: 'master.registered', trace_id, tenant_id, master_agent_id: MASTER_AGENT_ID, owner_person_id, scopes: this.master.scopes });
     return { ok: true, state: 'active', idempotent: false, idempotency_key, trace_id, master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: masterAuthzVersion, commands: this.master.scopes } };
+  }
+
+  exportState() {
+    return parseKernelState({
+      version: KernelStateVersion,
+      positions: [...this.positions.entries()],
+      persons: [...this.persons.entries()],
+      agents: [...this.agents.entries()],
+      events: [...this.events.entries()],
+      revocations: [...this.revocations.entries()],
+      approvals: [...this.approvals.entries()],
+      auditLog: this.auditLog,
+      master: this.master
+    });
+  }
+
+  restoreState(input) {
+    const state = parseKernelState(input);
+    this.positions = new Map(state.positions);
+    this.persons = new Map(state.persons);
+    this.agents = new Map(state.agents);
+    this.events = new Map(state.events);
+    this.revocations = new Map(state.revocations);
+    this.approvals = new Map(state.approvals);
+    this.auditLog = state.auditLog;
+    this.master = state.master ? (this.agents.get(state.master.agent_id) || state.master) : null;
   }
 
   dispatchCommand({ tenant_id, command, params }) {
