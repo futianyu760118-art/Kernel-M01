@@ -37,6 +37,11 @@ node scripts/import-ebms-personnel.mjs
 node scripts/import-ebms-personnel.mjs --account=linked
 # 按组织筛选并限制测试样本
 node scripts/import-ebms-personnel.mjs --department=研发中心 --limit=3
+
+# 让 M01 DEMO 启动时加载 EBMS 人员（PowerShell）
+$env:M01_MODE='demo'
+$env:M01_EBMS_SOURCE_DIR='..\..\EBMS-aeos-phase1\database\database'
+npm start
 ```
 
 - Windows：双击/执行 `start_windows.bat`（先测试后启动）。
@@ -69,6 +74,7 @@ node scripts/import-ebms-personnel.mjs --department=研发中心 --limit=3
 - `linked_user_id` 优先；缺失时才按姓名匹配。多账号同名会标记 `AMBIGUOUS_LOGIN_ACCOUNT`，不自动绑定。
 - 旧岗位默认映射到最低权限 `POS_STAFF`；明确包含经理/主管/主任/总监/部长/厂长/负责人时才映射 `POS_MANAGER`，其余进入 `POSITION_NOT_MAPPED` 复核清单。
 - 导入使用稳定事件 ID，重复执行幂等；重复导入不能恢复已经撤销的人员。
+- 设置 `M01_EBMS_SOURCE_DIR` 后，M01 服务启动前加载人员；可用 `M01_EBMS_IMPORT_STATUS`、`M01_EBMS_IMPORT_ACCOUNT`、`M01_EBMS_IMPORT_DEPARTMENT` 缩小启动导入范围。该启动导入仍是内存 DEMO，重启会重新从源数据导入。
 
 ## 运行检查（对应归档 07 手册）
 

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { M01Kernel } from './kernel.js';
 import { createOidcVerifier } from './oidc.js';
+import { buildLegacyPersonnelCandidates, filterLegacyPersonnel, importLegacyPersonnel, loadEbmsPersonnelSourceSync } from './legacy-import.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -372,7 +373,21 @@ export function start() {
   }
   const port = Number(process.env.PORT || 3101);
   const host = process.env.HOST || '0.0.0.0';
-  const server = createApp(undefined, { mode: configuredMode });
+  const kernel = new M01Kernel();
+  const legacySourceDir = String(process.env.M01_EBMS_SOURCE_DIR || '').trim();
+  if (legacySourceDir) {
+    const source = loadEbmsPersonnelSourceSync(resolve(legacySourceDir));
+    const candidates = buildLegacyPersonnelCandidates(source);
+    const filtered = filterLegacyPersonnel(candidates, {
+      status: process.env.M01_EBMS_IMPORT_STATUS || 'all',
+      account: process.env.M01_EBMS_IMPORT_ACCOUNT || 'all',
+      department: process.env.M01_EBMS_IMPORT_DEPARTMENT || undefined
+    });
+    const imported = importLegacyPersonnel(kernel, filtered.selected, { tenant_id: process.env.M01_EBMS_TENANT_ID || 'TENANT_A' });
+    if (imported.rejected > 0) throw new Error(`EBMS personnel import rejected ${imported.rejected} record(s)`);
+    console.log(`[M01] EBMS personnel imported: source=${source.personnel.length}, selected=${filtered.selected.length}, applied=${imported.applied}, idempotent=${imported.idempotent}`);
+  }
+  const server = createApp(kernel, { mode: configuredMode });
   server.listen(port, host, () => {
     console.log(`[M01 DEMO] listening on http://${host}:${port} (DEMO ONLY, in-memory, do not expose)`);
   });

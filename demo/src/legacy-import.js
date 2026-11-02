@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -53,6 +54,26 @@ async function readRecords(sourceDir, name) {
   }
 }
 
+function readRecordsSync(sourceDir, name) {
+  try {
+    return recordsOf(JSON.parse(readFileSync(join(sourceDir, `${name}.json`), 'utf8')));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw new Error(`无法读取 EBMS 表 ${name}: ${error.message}`);
+  }
+}
+
+function loadSourceFromReaders(sourceDir, reader) {
+  const users = reader(sourceDir, 'users');
+  const orgPersonnel = reader(sourceDir, 'org_personnel');
+  const personnel = reader(sourceDir, 'personnel');
+  const departments = reader(sourceDir, 'org_departments');
+  const positions = reader(sourceDir, 'org_positions');
+  const people = orgPersonnel.length ? orgPersonnel : personnel;
+  if (!people.length) throw new Error(`EBMS 人员表为空：${sourceDir}`);
+  return { users, personnel: people, departments, positions, source_dir: sourceDir };
+}
+
 export async function loadEbmsPersonnelSource(sourceDir) {
   const [users, orgPersonnel, personnel, departments, positions] = await Promise.all([
     readRecords(sourceDir, 'users'),
@@ -61,9 +82,17 @@ export async function loadEbmsPersonnelSource(sourceDir) {
     readRecords(sourceDir, 'org_departments'),
     readRecords(sourceDir, 'org_positions')
   ]);
-  const people = orgPersonnel.length ? orgPersonnel : personnel;
-  if (!people.length) throw new Error(`EBMS 人员表为空：${sourceDir}`);
-  return { users, personnel: people, departments, positions, source_dir: sourceDir };
+  return loadSourceFromReaders(sourceDir, (directory, table) => {
+    if (table === 'users') return users;
+    if (table === 'org_personnel') return orgPersonnel;
+    if (table === 'personnel') return personnel;
+    if (table === 'org_departments') return departments;
+    return positions;
+  });
+}
+
+export function loadEbmsPersonnelSourceSync(sourceDir) {
+  return loadSourceFromReaders(sourceDir, readRecordsSync);
 }
 
 function userMatchesFor(row, users) {
