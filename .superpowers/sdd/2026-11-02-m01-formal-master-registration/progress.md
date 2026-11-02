@@ -24,7 +24,7 @@
 - RED: added structured registration, idempotency and UI contract tests; focused run failed 3 tests for the expected missing behavior.
 - GREEN: explicit registration button, registration response contract, refresh-on-success and idempotent active registration implemented.
 - Verification: focused tests passed 8/8; `demo/npm test` passed 16/16.
-- Commit: pending in this task completion step.
+- Commit: `73952a5 fix(m01): make master registration explicit and observable`.
 
 ## Task 2: complete
 
@@ -32,3 +32,10 @@
 - GREEN: added `KernelStateV1` validation, export/restore, formal Owner requirements, fixed Master ID and revoked-master guard.
 - Verification: focused tests passed 7/7; `demo/npm test` passed 18/18.
 - Ruling: the existing DEMO behavior still permits implicit Owner creation and re-registering a revoked master so legacy local flows remain compatible; formal mode disables both behaviors as required by the spec.
+
+## Task 3: complete
+
+- RED: persistence server tests failed because the PostgreSQL store and readiness lifecycle did not exist.
+- GREEN: added PostgreSQL migrations/store, versioned snapshot persistence, revision conflict protection, audit deduplication, startup restore, `/readyz`, and mutation rollback on persistence failure.
+- Verification: `demo/npm test` passed 34/34; PostgreSQL store/server integration passed 5/5 with disposable PostgreSQL on `127.0.0.1:55432`.
+- Commit: pending in this task completion step.
