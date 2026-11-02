@@ -13,6 +13,8 @@ demo/
   public/index.html       # 开发管理页面（浏览器直连演示）
   test/*.test.js          # 本地自动化契约测试（node:test，零依赖）
   docs/CONTRACTS.md       # 候选接口契约（L1）
+  src/legacy-import.js    # EBMS 人员导入、账号冲突识别、筛选和幂等迁移
+  scripts/import-ebms-personnel.mjs # 使用真实 EBMS 数据做导入/筛选/授权验证
   .env.example            # 环境变量模板
   start_windows.bat       # Windows 一键 测试+启动
   Dockerfile / docker-compose.yml
@@ -28,6 +30,13 @@ demo/
 cd demo
 npm test        # 期望：全部通过
 npm start       # http://localhost:3101（默认 0.0.0.0:3101）
+
+# 使用工作区中的 EBMS 数据做一次真实人员导入验证
+node scripts/import-ebms-personnel.mjs
+# 只筛选已有唯一登录账号的人员
+node scripts/import-ebms-personnel.mjs --account=linked
+# 按组织筛选并限制测试样本
+node scripts/import-ebms-personnel.mjs --department=研发中心 --limit=3
 ```
 
 - Windows：双击/执行 `start_windows.bat`（先测试后启动）。
@@ -52,6 +61,14 @@ npm start       # http://localhost:3101（默认 0.0.0.0:3101）
 4. authorize：普通动作 ALLOW；未授权动作 DENY；高风险（数据导出/付款/生产控制）REQUIRE_APPROVAL。审批申请、审批决定和一次性票据消费由 M01 DEMO 闭环演示。
 5. M13 注册主/子 Agent：子 Agent 申请超出父 scope 的权限被收敛，无隐式提权；总控 Agent 同受治理——撤权 `A_MASTER_KERNEL` 后所有指令 DENY，重注册恢复。
 6. M07 离职 / 强制撤权 → 人员及其全部 Agent 立即 DENY；重复 event_id 幂等；乱序旧事件不恢复权限。
+
+### EBMS 人员导入规则
+
+- 主人员源为 EBMS `org_personnel`，没有该表时回退到 `personnel`；当前工作区实际读取到 147 条人员记录。
+- EBMS `users` 只用于识别登录账号映射，密码字段永不进入 M01。
+- `linked_user_id` 优先；缺失时才按姓名匹配。多账号同名会标记 `AMBIGUOUS_LOGIN_ACCOUNT`，不自动绑定。
+- 旧岗位默认映射到最低权限 `POS_STAFF`；明确包含经理/主管/主任/总监/部长/厂长/负责人时才映射 `POS_MANAGER`，其余进入 `POSITION_NOT_MAPPED` 复核清单。
+- 导入使用稳定事件 ID，重复执行幂等；重复导入不能恢复已经撤销的人员。
 
 ## 运行检查（对应归档 07 手册）
 

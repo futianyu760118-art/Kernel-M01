@@ -9,6 +9,6 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/integration.test.js test/master-agent.test.js test/master-say.test.js test/approvals.test.js"
+    "test": "node --test test/integration.test.js test/master-agent.test.js test/master-say.test.js test/approvals.test.js test/legacy-import.test.js"
   }
 }

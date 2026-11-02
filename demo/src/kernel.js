@@ -500,6 +500,9 @@ export class M01Kernel {
     if (event.tenant_id !== person.tenant_id) {
       return { ok: false, error: 'tenant mismatch for existing person', status: 403 };
     }
+    if (event.profile && typeof event.profile === 'object' && !Array.isArray(event.profile)) {
+      person.profile = { ...(person.profile || {}), ...event.profile };
+    }
     const hasSeq = event.seq !== undefined && event.seq !== null;
     const seq = Number(event.seq ?? 0);
     if (hasSeq && seq <= person.seq) {
@@ -755,7 +758,7 @@ export class M01Kernel {
   }
 
   _personView(p) {
-    return { person_id: p.person_id, tenant_id: p.tenant_id, status: p.status, position_id: p.position_id, seq: p.seq, authz_version: p.authz_version };
+    return { person_id: p.person_id, tenant_id: p.tenant_id, status: p.status, position_id: p.position_id, seq: p.seq, authz_version: p.authz_version, profile: p.profile || null };
   }
 
   _agentView(a) {
