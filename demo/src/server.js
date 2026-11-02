@@ -8,6 +8,7 @@ import { M01Kernel } from './kernel.js';
 import { createOidcVerifier } from './oidc.js';
 import { PostgresStore } from './postgres-store.js';
 import { buildLegacyPersonnelCandidates, filterLegacyPersonnel, importLegacyPersonnel, loadEbmsPersonnelSourceSync } from './legacy-import.js';
+import { notifyEbmsOffboard } from './m01-ebms-sync.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -73,6 +74,8 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
   const demoSessions = new Map();
   const m07Secret = config.m07Secret || process.env.M07_WEBHOOK_SECRET || 'local-demo-m07-secret';
   const m13Secret = config.m13Secret || process.env.M13_WEBHOOK_SECRET || 'local-demo-m13-secret';
+  const ebmsSyncUrl = config.ebmsSyncUrl || process.env.M01_EBMS_SYNC_URL || '';
+  const ebmsSyncSecret = config.ebmsSyncSecret || process.env.M01_EBMS_SYNC_TOKEN || '';
   const persistence = config.persistence || null;
   let persistenceRevision = 0;
   let persistenceStatus = persistence ? 'initializing' : 'memory';
@@ -506,8 +509,32 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
             }
           }
           if (result.trace_id && !(await persistOr503(res, beforeState))) return;
-          const message = result.decision === 'EXECUTED' ? '办理完成' : result.decision === 'REQUIRE_APPROVAL' ? '需要审批，尚未办理' : '暂时不能办理';
-          send(res, 200, { ...result, message, ...(approval ? { approval } : {}) });
+          let ebmsSync = null;
+          if (result.decision === 'EXECUTED' && selected.command === 'person.offboard' && ebmsSyncUrl && ebmsSyncSecret) {
+            const person = kernel.persons.get(body.person_id);
+            ebmsSync = await notifyEbmsOffboard({
+              url: ebmsSyncUrl,
+              secret: ebmsSyncSecret,
+              event: {
+                event_id: `M01_OFFBOARD_${body.person_id}_${result.trace_id}`,
+                person_id: body.person_id,
+                emp_code: person?.profile?.employee_code || '',
+                name: person?.profile?.display_name || '',
+                trace_id: result.trace_id,
+                offboarded_at: new Date().toISOString()
+              }
+            });
+          }
+          const message = result.decision === 'REQUIRE_APPROVAL'
+            ? '需要审批，尚未办理'
+            : result.decision !== 'EXECUTED'
+              ? '暂时不能办理'
+              : ebmsSync?.status === 'synced'
+                ? '办理完成，EBMS已同步'
+                : ebmsSync?.status === 'failed'
+                  ? 'M01已办理，EBMS同步失败，请联系管理员'
+                  : '办理完成';
+          send(res, 200, { ...result, message, ...(approval ? { approval } : {}), ...(ebmsSync ? { ebms_sync: ebmsSync } : {}) });
           return;
         }
         if (pathname === '/kernel/v1/capabilities') {

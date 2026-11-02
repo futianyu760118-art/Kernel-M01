@@ -679,6 +679,7 @@ export class M01Kernel {
     if (event.type === 'person.offboarded') {
       person.status = 'offboarded';
       person.position_id = null;
+      person.profile = { ...(person.profile || {}), source_status: 'inactive' };
       person.seq = seq || person.seq + 1;
       this.revocations.set(event.person_id, { reason: event.reason || 'offboarded', at: new Date().toISOString() });
       const trace_id = randomUUID();
