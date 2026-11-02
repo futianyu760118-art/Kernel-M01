@@ -455,6 +455,7 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
       </div>
       <div class="group">
         <h3>总控 Agent · 快捷口令</h3>
+        <button class="btn primary" data-action="masterRegister">注册/恢复总控 Agent<span class="hint">直接接口</span><span class="btn-spinner"></span></button>
         <button class="btn" data-action="sayPhrase" data-say="注册总控">注册总控 Agent<span class="hint">对话</span><span class="btn-spinner"></span></button>
         <button class="btn" data-action="sayPhrase" data-say="让 P_1001 入职，岗位 POS_STAFF">「来个人入职」<span class="btn-spinner"></span></button>
         <button class="btn" data-action="sayPhrase" data-say="把 P_1001 调到经理岗">「调到经理岗」<span class="btn-spinner"></span></button>
@@ -954,9 +955,21 @@ const actions = {
   },
   async sayPhrase(btn) { await sayText(btn.dataset.say || ''); },
   async masterRegister() {
-    const r = await api('POST', '/kernel/v1/master/register', { tenant_id: $('tenant').value, owner_person_id: $('owner').value }, headers());
+        const tenantId = $('tenant').value;
+        const ownerPersonId = $('owner').value;
+        const r = await api('POST', '/kernel/v1/master/register', {
+          tenant_id: tenantId,
+          owner_person_id: ownerPersonId,
+          master_agent_id: 'A_MASTER_KERNEL',
+          idempotency_key: `${tenantId}:${ownerPersonId}:A_MASTER_KERNEL`
+        }, headers());
     log('MASTER注册', r.data, r.ok ? 'EXECUTED' : 'DENY');
-    if (r.ok) { toast('总控 Agent 已注册', 'success'); setMasterUI(r.data.master); }
+        if (r.ok) {
+          toast(r.data.idempotent ? '总控 Agent 已恢复' : '总控 Agent 已注册', 'success');
+          await actions.refreshStatus();
+        } else {
+          toast(`总控注册失败：${r.data.error || `HTTP ${r.status}`}`, 'error');
+        }
   },
   async m07hire() { await m07('person.hired', $('position').value); },
   async m07transfer() { await m07('person.transferred', 'POS_MANAGER'); },

@@ -74,9 +74,12 @@ export class M01Kernel {
     });
   }
 
-  registerMaster({ tenant_id, owner_person_id }) {
+  registerMaster({ tenant_id, owner_person_id, master_agent_id = MASTER_AGENT_ID, idempotency_key = null }) {
     if (!tenant_id || !owner_person_id) {
       return { ok: false, error: 'required: tenant_id, owner_person_id', status: 400 };
+    }
+    if (master_agent_id !== MASTER_AGENT_ID) {
+      return { ok: false, error: `master_agent_id must be ${MASTER_AGENT_ID}`, status: 400 };
     }
     if (!this.positions.has('POS_OWNER')) {
       return { ok: false, error: 'POS_OWNER not seeded', status: 500 };
@@ -93,6 +96,16 @@ export class M01Kernel {
       return { ok: false, error: 'owner person is not active', status: 403 };
     }
     const existingMaster = this.agents.get(MASTER_AGENT_ID);
+    if (existingMaster?.status === 'active' && existingMaster.tenant_id === tenant_id && existingMaster.owner_person_id === owner_person_id) {
+      return {
+        ok: true,
+        state: 'active',
+        idempotent: true,
+        idempotency_key,
+        trace_id: randomUUID(),
+        master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: existingMaster.authz_version, commands: existingMaster.scopes }
+      };
+    }
     const masterAuthzVersion = Number.isInteger(existingMaster?.authz_version) && existingMaster.authz_version > 0
       ? existingMaster.authz_version
       : 1;
@@ -106,8 +119,9 @@ export class M01Kernel {
       registered_at: new Date().toISOString()
     };
     this.agents.set(MASTER_AGENT_ID, this.master);
-    this._audit({ kind: 'master.registered', tenant_id, master_agent_id: MASTER_AGENT_ID, owner_person_id, scopes: this.master.scopes });
-    return { ok: true, master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: masterAuthzVersion, commands: this.master.scopes } };
+    const trace_id = randomUUID();
+    this._audit({ kind: 'master.registered', trace_id, tenant_id, master_agent_id: MASTER_AGENT_ID, owner_person_id, scopes: this.master.scopes });
+    return { ok: true, state: 'active', idempotent: false, idempotency_key, trace_id, master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: masterAuthzVersion, commands: this.master.scopes } };
   }
 
   dispatchCommand({ tenant_id, command, params }) {
@@ -330,7 +344,7 @@ export class M01Kernel {
         { label: '来个人入职', prompt: `让 ${ex.person || 'P_1001'} 入职，岗位 POS_STAFF`, primary: true },
         { label: '看看状态', prompt: '看看系统状态' },
         { label: '查能力', prompt: `查一下 ${ex.person || 'P_1001'} 的能力` }
-      ]);
+      ], { decision: 'EXECUTED', command: 'master.register', registration: r });
     }
     if (/^(你好|hi|hello|在吗|帮帮忙|帮助|help|能做什么|你会什么|你能干什么)/.test(low)) {
       return reply('你好，负责人。我是总控 Agent，替你统管这个系统：人员入转调离、子 Agent 注册撤销、能力查询、判权、撤权和状态审计都能办。直接说事就行。', [

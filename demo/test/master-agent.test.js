@@ -37,6 +37,11 @@ test('master agent: register by owner then execute hire/query/authorize commands
   assert.equal(reg.data.master.agent_id, 'A_MASTER_KERNEL');
   assert.ok(reg.data.master.commands.includes('person.hire'));
 
+  const repeat = await postJson(base, '/kernel/v1/master/register', { tenant_id: 'TENANT_A', owner_person_id: 'P_OWNER' });
+  assert.equal(repeat.status, 200);
+  assert.equal(repeat.data.idempotent, true);
+  assert.equal(repeat.data.master.agent_id, 'A_MASTER_KERNEL');
+
   const hire = await postJson(base, '/kernel/v1/master/command', { tenant_id: 'TENANT_A', command: 'person.hire', params: { person_id: 'P_5001', position_id: 'POS_STAFF' } });
   assert.equal(hire.data.decision, 'EXECUTED');
   assert.equal(hire.data.output.status, 'active');

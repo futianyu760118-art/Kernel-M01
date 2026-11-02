@@ -326,7 +326,12 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
           return;
         }
         if (pathname === '/kernel/v1/master/register') {
-          const result = kernel.registerMaster({ tenant_id: body.tenant_id, owner_person_id: body.owner_person_id });
+          const result = kernel.registerMaster({
+            tenant_id: body.tenant_id,
+            owner_person_id: body.owner_person_id,
+            master_agent_id: body.master_agent_id,
+            idempotency_key: body.idempotency_key
+          });
           if (result.ok === false) {
             send(res, result.status || 400, { error: result.error });
             return;

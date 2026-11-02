@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createApp } from '../src/server.js';
 import { M01Kernel } from '../src/kernel.js';
 
@@ -22,6 +23,24 @@ async function say(base, text) {
 }
 
 const onePrimary = (qa) => qa.filter((a) => a.primary).length === 1;
+
+test('say: master registration exposes an executable result for the UI to refresh', async (t) => {
+  const { server, base } = await startServer();
+  t.after(() => server.close());
+
+  const result = await say(base, '注册总控');
+  assert.equal(result.status, 200);
+  assert.equal(result.data.decision, 'EXECUTED');
+  assert.equal(result.data.command, 'master.register');
+  assert.equal(result.data.registration.state, 'active');
+  assert.ok(result.data.trace_id);
+});
+
+test('console exposes a direct master registration action and refreshes its state', () => {
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /data-action="masterRegister"/);
+  assert.match(html, /masterRegister[\s\S]{0,800}refreshStatus/);
+});
 
 test('say: colloquial hire asks clarifying options, chip prompt resolves and executes', async (t) => {
   const { server, base } = await startServer();
