@@ -86,3 +86,15 @@ test('对话区显示通俗的审批状态和办理结果', async (t) => {
   assert.match(html, /审批状态/);
   assert.match(html, /办理结果/);
 });
+
+test('选择人员后显示办理过程和进度，并支持推进到完成', () => {
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="quickProcess"/);
+  assert.match(html, /id="quickProcessSteps"/);
+  assert.match(html, /id="quickProcessProgress"/);
+  assert.match(html, /确认人员/);
+  assert.match(html, /检查当前状态/);
+  assert.match(html, /办理完成/);
+  assert.match(html, /renderQuickProcess/);
+  assert.match(html, /personLabel\(person\)/);
+});

@@ -412,6 +412,17 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
 .quick-person-status { display:flex; align-items:center; gap:8px; min-height:24px; margin-top:6px; color:var(--text-2); font-size:11px; }
 .quick-person-status .st { flex:none; }
 .quick-person-status .quick-person-meta { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.quick-process { margin-top:14px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:rgba(0,0,0,.08); }
+.quick-process-head { display:flex; justify-content:space-between; gap:12px; margin-bottom:8px; }
+.quick-process-title { color:var(--text-1); font-size:12px; }
+.quick-process-progress { color:var(--text-2); font-size:11px; text-align:right; }
+.quick-process-steps { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin:0; padding:0; list-style:none; }
+.quick-process-step { position:relative; padding:7px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text-3); font-size:11px; text-align:center; }
+.quick-process-step.done { color:var(--allow); border-color:rgba(52,201,142,.4); background:rgba(52,201,142,.06); }
+.quick-process-step.active { color:var(--brand-ink); border-color:var(--brand); background:var(--brand-veil); }
+.quick-process-step.waiting { color:var(--warn); border-color:rgba(232,163,61,.45); background:rgba(232,163,61,.06); }
+.quick-process-step.failed { color:var(--deny); border-color:rgba(240,86,79,.45); background:rgba(240,86,79,.06); }
+@media (max-width: 760px) { .quick-process-steps { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .quick-btn { min-height:36px; padding:8px 18px; background:var(--brand); color:#fff; border:0; border-radius:7px; font-weight:700; cursor:pointer; }
 .quick-btn:hover { background:var(--brand-strong); }
 .quick-btn:disabled { opacity:.5; cursor:not-allowed; }
@@ -569,6 +580,15 @@ td.pid { color: var(--text-1); font-family: "Cascadia Code", Consolas, monospace
           </select>
         </div>
         <button class="quick-btn" data-action="quickHandle" disabled>一键办理</button>
+      </div>
+      <div id="quickProcess" class="quick-process" aria-live="polite">
+        <div class="quick-process-head"><strong id="quickProcessTitle" class="quick-process-title">办理过程</strong><span id="quickProcessProgress" class="quick-process-progress">请先选择人员</span></div>
+        <ol id="quickProcessSteps" class="quick-process-steps">
+          <li class="quick-process-step active">确认人员</li>
+          <li class="quick-process-step">检查当前状态</li>
+          <li class="quick-process-step">办理事项</li>
+          <li class="quick-process-step">办理完成</li>
+        </ol>
       </div>
     </section>
     <section class="card flow-card" id="flowCard" aria-labelledby="flowTitle">
@@ -927,9 +947,36 @@ function updateQuickPersonStatus() {
   const person = currentPeople.find((item) => item.person_id === $('quickPerson')?.value);
   if (!person) {
     box.textContent = currentPeople.length ? '请输入关键词并选择人员' : '暂无可办理人员';
+    renderQuickProcess('idle');
     return;
   }
   box.innerHTML = `<span class="st ${esc(person.status)}">${esc(statusLabel(person.status))}</span><span class="quick-person-meta">岗位：${esc(positionLabel(person.position_id))} · 部门：${esc(person.profile?.department_name || '未填写')}</span>`;
+  renderQuickProcess('idle');
+}
+function renderQuickProcess(stage = 'idle') {
+  const person = currentPeople.find((item) => item.person_id === $('quickPerson')?.value);
+  const progress = $('quickProcessProgress');
+  const stepsBox = $('quickProcessSteps');
+  const title = $('quickProcessTitle');
+  if (!progress || !stepsBox || !title) return;
+  const action = $('quickAction')?.value || 'hire';
+  const actionName = ({ hire: '办理入职', transfer_manager: '调整到经理岗位', offboard: '办理离职' })[action] || '办理事项';
+  const steps = action === 'offboard'
+    ? ['确认人员', '检查当前状态', '提交审批', '等待审批']
+    : ['确认人员', '检查当前状态', actionName, '办理完成'];
+  const states = stage === 'executed' ? ['done', 'done', 'done', 'done']
+    : stage === 'approval' ? ['done', 'done', 'done', 'waiting']
+      : stage === 'running' ? ['done', 'done', 'active', '']
+        : stage === 'failed' ? ['done', 'done', 'failed', '']
+          : person ? ['done', 'active', '', ''] : ['active', '', '', ''];
+  const stateText = stage === 'executed' ? '已完成'
+    : stage === 'approval' ? '等待审批'
+      : stage === 'running' ? '办理中'
+        : stage === 'failed' ? '未完成'
+          : person ? `已选择：${personLabel(person)}` : '请先选择人员';
+  title.textContent = person ? `${personLabel(person)} · ${actionName}` : '办理过程';
+  progress.textContent = stateText;
+  stepsBox.innerHTML = steps.map((label, index) => `<li class="quick-process-step ${states[index]}">${label}</li>`).join('');
 }
 const headers = () => ({
   'Authorization': `${OIDC.accessToken ? OIDC.tokenType + ' ' + OIDC.accessToken : 'Bearer ' + $('token').value}`,
@@ -1218,16 +1265,30 @@ const actions = {
         const personId = $('quickPerson').value;
         const action = $('quickAction').value;
         if (!personId) { toast('请先选择人员', 'error'); throw new Error('no person'); }
-        const r = await api('POST', '/kernel/v1/quick/person-action', {
-          tenant_id: $('tenant').value,
-          person_id: personId,
-          action
-        }, headers());
+        renderQuickProcess('running');
+        let r;
+        try {
+          r = await api('POST', '/kernel/v1/quick/person-action', {
+            tenant_id: $('tenant').value,
+            person_id: personId,
+            action
+          }, headers());
+        } catch (error) {
+          renderQuickProcess('failed');
+          throw error;
+        }
         log('一键办理', r.data, r.data.decision || '');
         renderDialogResult(r.data);
-        if (!r.ok) { toast('这次没有办理成功，请稍后重试', 'error'); return; }
+        if (!r.ok) { renderQuickProcess('failed'); toast('这次没有办理成功，请稍后重试', 'error'); return; }
         toast(r.data.message || '办理完成', r.data.decision === 'EXECUTED' ? 'success' : 'error');
-        if (r.data.decision === 'EXECUTED') await this.refreshStatus();
+        if (r.data.decision === 'EXECUTED') {
+          await this.refreshStatus();
+          renderQuickProcess('executed');
+        } else if (r.data.decision === 'REQUIRE_APPROVAL') {
+          renderQuickProcess('approval');
+        } else {
+          renderQuickProcess('failed');
+        }
       },
       async loginOidc() { await startOidcLogin(); },
   async saySend() {
@@ -1334,6 +1395,7 @@ document.addEventListener('click', async (ev) => {
 
     $('quickPersonSearch').addEventListener('input', refreshQuickPeople);
     $('quickPerson').addEventListener('change', updateQuickPersonStatus);
+    $('quickAction').addEventListener('change', () => renderQuickProcess('idle'));
 
 (async () => {
   const t0 = performance.now();
