@@ -58,3 +58,11 @@ test('页面提供一键登录和一键办理入口', () => {
   assert.match(html, /quickLogin/);
   assert.match(html, /quickHandle/);
 });
+
+test('快速办理支持输入查找人员并显示选中人员状态', () => {
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="quickPersonSearch"/);
+  assert.match(html, /输入姓名、编号或手机号后四位/);
+  assert.match(html, /id="quickPersonStatus"/);
+  assert.match(html, /statusLabel\(person\.status\)/);
+});
