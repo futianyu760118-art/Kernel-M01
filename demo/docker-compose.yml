@@ -54,6 +54,10 @@ services:
       # M01 已审批离职结果回写 EBMS；URL 为 EBMS 服务地址，令牌必须与 EBMS 一致
       M01_EBMS_SYNC_URL: "${M01_EBMS_SYNC_URL:-http://host.docker.internal:3010}"
       M01_EBMS_SYNC_TOKEN: "${M01_EBMS_SYNC_TOKEN:?set M01_EBMS_SYNC_TOKEN in .env}"
+      AEOS_PERSON_LIFECYCLE_URL: "${AEOS_PERSON_LIFECYCLE_URL:-}"
+      AEOS_PERSON_LIFECYCLE_KEY_ID: "${AEOS_PERSON_LIFECYCLE_KEY_ID:-m01-kernel}"
+      AEOS_PERSON_LIFECYCLE_SECRET: "${AEOS_PERSON_LIFECYCLE_SECRET:-}"
+      M01_EBMS_DIRECT_COMPAT: "${M01_EBMS_DIRECT_COMPAT:-false}"
     volumes:
       - "../../EBMS-aeos-phase1/database/database:/data/ebms:ro"
     healthcheck:

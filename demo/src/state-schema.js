@@ -23,6 +23,9 @@ export function parseKernelState(input) {
   }
   if (input.externalIdentities !== undefined) validateMapEntries(input.externalIdentities, 'externalIdentities');
   if (!Array.isArray(input.auditLog)) throw new Error('kernel state auditLog must be an array');
+  if (input.personLifecycleOutbox !== undefined && !Array.isArray(input.personLifecycleOutbox)) {
+    throw new Error('kernel state personLifecycleOutbox must be an array');
+  }
   if (input.master !== null && (typeof input.master !== 'object' || Array.isArray(input.master))) {
     throw new Error('kernel state master must be an object or null');
   }
@@ -35,6 +38,7 @@ export function parseKernelState(input) {
     revocations: clone(input.revocations),
     approvals: clone(input.approvals),
     externalIdentities: clone(input.externalIdentities || []),
+    personLifecycleOutbox: clone(input.personLifecycleOutbox || []),
     auditLog: clone(input.auditLog),
     master: clone(input.master)
   };

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { KernelStateVersion, parseKernelState } from './state-schema.js';
+import { applyPersonLifecycleTransition } from './person-lifecycle-event.js';
 
 export const HIGH_RISK_ACTIONS = new Set(['data.export', 'payment.execute', 'device.control']);
 
@@ -8,6 +9,7 @@ export const MASTER_COMMANDS = new Set([
   'person.hire',
   'person.transfer',
   'person.offboard',
+  'person.reinstate',
   'agent.register',
   'agent.revoke',
   'principal.revoke',
@@ -16,7 +18,7 @@ export const MASTER_COMMANDS = new Set([
   'system.status',
   'audit.tail'
 ]);
-export const HIGH_RISK_COMMANDS = new Set(['person.offboard', 'agent.revoke', 'principal.revoke']);
+export const HIGH_RISK_COMMANDS = new Set(['person.offboard', 'person.reinstate', 'agent.revoke', 'principal.revoke']);
 
 const M07_EVENT_TYPES = new Set(['person.hired', 'person.transferred', 'person.offboarded']);
 const M13_EVENT_TYPES = new Set(['agent.registered', 'agent.revoked']);
@@ -43,6 +45,7 @@ export class M01Kernel {
     this.revocations = new Map();
     this.approvals = new Map();
     this.externalIdentities = new Map();
+    this.personLifecycleOutbox = [];
     this.auditLog = [];
     this.master = null;
     this._seedPositions();
@@ -222,6 +225,7 @@ export class M01Kernel {
       revocations: [...this.revocations.entries()],
       approvals: [...this.approvals.entries()],
       externalIdentities: [...this.externalIdentities.entries()],
+      personLifecycleOutbox: this.personLifecycleOutbox,
       auditLog: this.auditLog,
       master: this.master
     });
@@ -236,6 +240,7 @@ export class M01Kernel {
     this.revocations = new Map(state.revocations);
     this.approvals = new Map(state.approvals);
     this.externalIdentities = new Map(state.externalIdentities || []);
+    this.personLifecycleOutbox = state.personLifecycleOutbox || [];
     this.auditLog = state.auditLog;
     this.master = state.master ? (this.agents.get(state.master.agent_id) || state.master) : null;
   }
@@ -283,7 +288,9 @@ export class M01Kernel {
       case 'person.transfer':
         return this._masterWrap(trace_id, command, tenant_id, this.applyM07Event({ event_id: evt(), tenant_id, type: 'person.transferred', person_id: p.person_id, position_id: p.position_id, seq: Date.now() }));
       case 'person.offboard':
-        return this._masterWrap(trace_id, command, tenant_id, this.applyM07Event({ event_id: evt(), tenant_id, type: 'person.offboarded', person_id: p.person_id, seq: Date.now() }));
+        return this._masterWrap(trace_id, command, tenant_id, applyPersonLifecycleTransition(this, p.person_id, 'offboard', p.effective_at || new Date().toISOString(), m.owner_person_id, trace_id));
+      case 'person.reinstate':
+        return this._masterWrap(trace_id, command, tenant_id, applyPersonLifecycleTransition(this, p.person_id, 'reinstate', p.effective_at || new Date().toISOString(), m.owner_person_id, trace_id));
       case 'agent.register':
         return this._masterWrap(trace_id, command, tenant_id, this.applyM13Event({ event_id: evt(), tenant_id, type: 'agent.registered', agent_id: p.agent_id, owner_person_id: p.owner_person_id || m.owner_person_id, parent_agent_id: p.parent_agent_id || null, scopes: p.scopes || [] }));
       case 'agent.revoke':

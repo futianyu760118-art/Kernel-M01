@@ -8,7 +8,7 @@ import { M01Kernel } from './kernel.js';
 import { createOidcVerifier } from './oidc.js';
 import { PostgresStore } from './postgres-store.js';
 import { buildLegacyPersonnelCandidates, filterLegacyPersonnel, importLegacyPersonnel, loadEbmsPersonnelSourceSync } from './legacy-import.js';
-import { notifyEbmsOffboard } from './m01-ebms-sync.js';
+import { notifyEbmsOffboard, notifyPersonLifecycle } from './m01-ebms-sync.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -76,6 +76,10 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
   const m13Secret = config.m13Secret || process.env.M13_WEBHOOK_SECRET || 'local-demo-m13-secret';
   const ebmsSyncUrl = config.ebmsSyncUrl || process.env.M01_EBMS_SYNC_URL || '';
   const ebmsSyncSecret = config.ebmsSyncSecret || process.env.M01_EBMS_SYNC_TOKEN || '';
+  const personLifecycleUrl = config.personLifecycleUrl || process.env.AEOS_PERSON_LIFECYCLE_URL || process.env.M01_PERSON_LIFECYCLE_URL || '';
+  const personLifecycleKeyId = config.personLifecycleKeyId || process.env.AEOS_PERSON_LIFECYCLE_KEY_ID || 'm01-kernel';
+  const personLifecycleSecret = config.personLifecycleSecret || process.env.AEOS_PERSON_LIFECYCLE_SECRET || '';
+  const ebmsDirectCompat = config.ebmsDirectCompat ?? String(process.env.M01_EBMS_DIRECT_COMPAT || 'false').toLowerCase() === 'true';
   const persistence = config.persistence || null;
   let persistenceRevision = 0;
   let persistenceStatus = persistence ? 'initializing' : 'memory';
@@ -470,7 +474,9 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
           const actionMap = {
             hire: { command: 'person.hire', position_id: body.position_id || 'POS_STAFF' },
             transfer_manager: { command: 'person.transfer', position_id: 'POS_MANAGER' },
-            offboard: { command: 'person.offboard' }
+            offboard: { command: 'person.offboard' },
+            reinstate: { command: 'person.reinstate' },
+            rehire: { command: 'person.reinstate' }
           };
           const selected = actionMap[body.action];
           if (!selected || !body.person_id) {
@@ -485,19 +491,20 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
             params: {
               person_id: body.person_id,
               ...(selected.position_id ? { position_id: selected.position_id } : {}),
+              ...(body.effective_at ? { effective_at: body.effective_at } : {}),
               ...(body.approval_ticket ? { approval_ticket: body.approval_ticket } : {})
             }
           });
           let approval = null;
           if (result.decision === 'REQUIRE_APPROVAL') {
             approval = kernel.listApprovals(tenantId).find((item) => item.status === 'PENDING'
-              && item.resource === 'master' && item.action === 'person.offboard' && item.object_id === body.person_id);
+              && item.resource === 'master' && item.action === selected.command && item.object_id === body.person_id);
             if (!approval) {
               const created = kernel.createApproval({
                 tenant_id: tenantId,
                 requester_id: mode === 'oidc' ? principal.principal_id : demoRequesterPersonId,
                 resource: 'master',
-                action: 'person.offboard',
+                action: selected.command,
                 object_id: body.person_id,
                 parameters: { person_id: body.person_id }
               });
@@ -510,31 +517,46 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
           }
           if (result.trace_id && !(await persistOr503(res, beforeState))) return;
           let ebmsSync = null;
-          if (result.decision === 'EXECUTED' && selected.command === 'person.offboard' && ebmsSyncUrl && ebmsSyncSecret) {
+          let lifecycleSync = null;
+          if (result.decision === 'EXECUTED' && (selected.command === 'person.offboard' || selected.command === 'person.reinstate')) {
             const person = kernel.persons.get(body.person_id);
-            ebmsSync = await notifyEbmsOffboard({
-              url: ebmsSyncUrl,
-              secret: ebmsSyncSecret,
-              event: {
-                event_id: `M01_OFFBOARD_${body.person_id}_${result.trace_id}`,
-                person_id: body.person_id,
-                emp_code: person?.profile?.employee_code || '',
-                name: person?.profile?.display_name || '',
-                trace_id: result.trace_id,
-                offboarded_at: new Date().toISOString()
-              }
-            });
+            const lifecycleEvent = (kernel.personLifecycleOutbox || []).find((item) => item.trace_id === result.trace_id);
+            if (personLifecycleUrl && personLifecycleSecret && lifecycleEvent) {
+              lifecycleSync = await notifyPersonLifecycle({
+                url: personLifecycleUrl,
+                keyId: personLifecycleKeyId,
+                secret: personLifecycleSecret,
+                event: lifecycleEvent
+              });
+            } else if (selected.command === 'person.offboard' && ebmsDirectCompat && ebmsSyncUrl && ebmsSyncSecret) {
+              ebmsSync = await notifyEbmsOffboard({
+                url: ebmsSyncUrl,
+                secret: ebmsSyncSecret,
+                event: {
+                  event_id: `M01_OFFBOARD_${body.person_id}_${result.trace_id}`,
+                  person_id: body.person_id,
+                  emp_code: person?.profile?.employee_code || '',
+                  name: person?.profile?.display_name || '',
+                  trace_id: result.trace_id,
+                  offboarded_at: new Date().toISOString()
+                }
+              });
+            }
           }
           const message = result.decision === 'REQUIRE_APPROVAL'
             ? '需要审批，尚未办理'
             : result.decision !== 'EXECUTED'
               ? '暂时不能办理'
-              : ebmsSync?.status === 'synced'
-                ? '办理完成，EBMS已同步'
-                : ebmsSync?.status === 'failed'
-                  ? 'M01已办理，EBMS同步失败，请联系管理员'
+              : lifecycleSync?.status === 'synced'
+                ? '办理完成，AEOS已同步'
+                : lifecycleSync?.status === 'failed'
+                  ? 'M01已办理，AEOS同步失败，请联系管理员'
+                  : ebmsSync?.status === 'synced'
+                    ? '办理完成，EBMS已同步'
+                    : ebmsSync?.status === 'failed'
+                      ? 'M01已办理，EBMS同步失败，请联系管理员'
                   : '办理完成';
-          send(res, 200, { ...result, message, ...(approval ? { approval } : {}), ...(ebmsSync ? { ebms_sync: ebmsSync } : {}) });
+          send(res, 200, { ...result, message, ...(approval ? { approval } : {}), ...(lifecycleSync ? { lifecycle_sync: lifecycleSync } : {}), ...(ebmsSync ? { ebms_sync: ebmsSync } : {}) });
           return;
         }
         if (pathname === '/kernel/v1/capabilities') {
