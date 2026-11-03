@@ -391,7 +391,7 @@ export class M01Kernel {
     if (missing) return { ok: false, status: 400, error: `required: ${missing[0]}` };
     if (!PERSON_CHANGE_ACTIONS.has(normalizedAction)) return { ok: false, status: 400, error: '不支持的人员变动类型' };
     const requester = this.persons.get(String(requester_id));
-    if (requester && (requester.tenant_id !== tenant_id || requester.status !== 'active')) {
+    if (!requester || requester.tenant_id !== tenant_id || requester.status !== 'active') {
       return { ok: false, status: 403, error: '提交人不是本单位在职人员' };
     }
     const duplicate = [...this.personChangeRequests.values()].find((item) => item.tenant_id === tenant_id && item.idempotency_key === String(idempotency_key));
@@ -430,7 +430,11 @@ export class M01Kernel {
     const request = this.personChangeRequests.get(request_id);
     if (!request) return { ok: false, status: 404, error: '找不到人员变动申请' };
     if (request.tenant_id !== tenant_id) return { ok: false, status: 403, error: '申请不属于当前单位' };
-    if (!approver_id || request.requester_id === String(approver_id)) return { ok: false, status: 403, error: '提交人不能审批自己的申请' };
+    const approver = this.persons.get(String(approver_id || ''));
+    if (!approver || approver.tenant_id !== request.tenant_id || approver.status !== 'active') {
+      return { ok: false, status: 403, error: '审批人不是本单位在职人员' };
+    }
+    if (request.requester_id === String(approver_id)) return { ok: false, status: 403, error: '提交人不能审批自己的申请' };
     if (request.status !== 'PENDING') return { ok: false, status: 409, error: '申请已经处理过了' };
     const normalized = String(decision || '').toUpperCase();
     if (!['APPROVE', 'REJECT'].includes(normalized)) return { ok: false, status: 400, error: '审批结果只能是同意或拒绝' };

@@ -65,3 +65,26 @@ test('M01可直接发起同一人员变动流程，重复幂等且不能自己�
   assert.equal(selfApprove.status, 403);
 });
 
+test('人员变动申请拒绝未知提交人和未知审批人', () => {
+  const kernel = new M01Kernel();
+  kernel.applyM07Event({ event_id: 'PCR_OWNER_HIRE_2', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_OWNER', position_id: 'POS_OWNER', seq: 1 });
+  kernel.applyM07Event({ event_id: 'PCR_TARGET_HIRE_2', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_TARGET', position_id: 'POS_STAFF', seq: 1 });
+  const unknownRequester = kernel.submitPersonChangeRequest({
+    tenant_id: 'TENANT_A', requester_id: 'P_UNKNOWN', person_id: 'P_TARGET', action: 'offboard',
+    department_id: 'D_RD', position_id: 'POS_STAFF', job_title: '普通员工', effective_at: new Date().toISOString(),
+    reason: '测试', idempotency_key: 'unknown-requester'
+  });
+  assert.equal(unknownRequester.status, 403);
+
+  kernel.applyM07Event({ event_id: 'PCR_REQUESTER_HIRE_2', tenant_id: 'TENANT_A', type: 'person.hired', person_id: 'P_REQUESTER', position_id: 'POS_STAFF', seq: 1 });
+  const created = kernel.submitPersonChangeRequest({
+    tenant_id: 'TENANT_A', requester_id: 'P_REQUESTER', person_id: 'P_TARGET', action: 'offboard',
+    department_id: 'D_RD', position_id: 'POS_STAFF', job_title: '普通员工', effective_at: new Date().toISOString(),
+    reason: '测试', idempotency_key: 'unknown-approver'
+  });
+  const unknownApprover = kernel.decidePersonChangeRequest({
+    tenant_id: 'TENANT_A', request_id: created.request.request_id, approver_id: 'P_UNKNOWN', decision: 'APPROVE'
+  });
+  assert.equal(unknownApprover.status, 403);
+});
+
