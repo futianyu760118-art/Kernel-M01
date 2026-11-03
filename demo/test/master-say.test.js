@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createApp } from '../src/server.js';
 import { M01Kernel } from '../src/kernel.js';
 
@@ -22,6 +23,24 @@ async function say(base, text) {
 }
 
 const onePrimary = (qa) => qa.filter((a) => a.primary).length === 1;
+
+test('say: master registration exposes an executable result for the UI to refresh', async (t) => {
+  const { server, base } = await startServer();
+  t.after(() => server.close());
+
+  const result = await say(base, '注册总控');
+  assert.equal(result.status, 200);
+  assert.equal(result.data.decision, 'EXECUTED');
+  assert.equal(result.data.command, 'master.register');
+  assert.equal(result.data.registration.state, 'active');
+  assert.ok(result.data.trace_id);
+});
+
+test('console exposes a direct master registration action and refreshes its state', () => {
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /data-action="masterRegister"/);
+  assert.match(html, /masterRegister[\s\S]{0,800}refreshStatus/);
+});
 
 test('say: colloquial hire asks clarifying options, chip prompt resolves and executes', async (t) => {
   const { server, base } = await startServer();
@@ -53,7 +72,7 @@ test('say: destructive offboard asks confirmation, then fail-closed REQUIRE_APPR
 
   const r1 = await say(base, '让 P_7002 离职');
   assert.ok(!r1.data.decision);
-  assert.ok(r1.data.content.includes('高风险'));
+  assert.ok(r1.data.content.includes('需要管理员审批'));
   assert.ok(r1.data.quick_actions.some((a) => /确认/.test(a.label)));
 
   const r2 = await say(base, '确认让 P_7002 离职');
@@ -81,6 +100,6 @@ test('say: greetings, status and unknown intents follow quick_actions contract',
 
   const unknown = await say(base, '帮我订一杯咖啡');
   assert.ok(!unknown.data.decision);
-  assert.ok(unknown.data.content.includes('还不会'));
+  assert.ok(unknown.data.content.includes('暂时不会办'));
   assert.ok(unknown.data.quick_actions.length <= 3 && onePrimary(unknown.data.quick_actions));
 });

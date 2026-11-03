@@ -30,6 +30,44 @@
 
 响应 200：`{ ok, idempotent, stale?, applied, person }`；400 字段错误；401 验签失败；403 租户冲突。
 
+#### M07 提交人员变动申请
+
+离职、复职、入职和调岗，统一先进入 M01 的“人员变动申请”。M07 只负责填写资料和提交，M01 负责审核、办理和记录结果。申请资料必须写清楚：
+
+```json
+{
+  "type": "person.change.request",
+  "tenant_id": "TENANT_A",
+  "requester_id": "P_HR_001",
+  "person_id": "P_1001",
+  "action": "offboard",
+  "department_id": "D_SALES",
+  "position_id": "POS_SALES",
+  "job_title": "销售经理",
+  "effective_at": "2026-11-03T09:00:00+08:00",
+  "reason": "员工离职",
+  "idempotency_key": "TENANT_A:P_1001:offboard:20261103"
+}
+```
+
+`action` 只能填写 `hire`（入职）、`transfer`（调岗）、`offboard`（离职）或 `reinstate`（复职）。M01 收到后先保存为 `PENDING`（待审批），没有审批通过前，不改变人员状态。重复提交同一个 `idempotency_key` 只返回原申请，不重复办理。
+
+M01 审核通过后才会办理，并把结果返回给 M07；拒绝则只记录原因，不改变人员状态。审核人不能是提交人。
+
+### POST /kernel/v1/person-change-requests（M01 直接发起）
+
+管理员也可以不经过 M07，直接在 M01 填写同一份资料。字段与上面相同（不填写 `type`），仍然进入同一个申请列表、使用同一套审核规则和同步结果。
+
+### GET /kernel/v1/person-change-requests?tenant_id=TENANT_A（查看申请）
+
+查看待审批、已完成、已拒绝和办理失败的申请。页面应把状态显示为“待审批、办理中、已完成、已拒绝、办理失败”，不要显示内部英文状态。
+
+### POST /kernel/v1/person-change-requests/:request_id/decision（M01 审核并办理）
+
+请求：`{ "tenant_id": "TENANT_A", "approver_id": "P_OWNER", "decision": "APPROVE|REJECT", "comment": "说明" }`。
+
+同意后 M01 才执行人员状态变更，并向 EDP、EBMS、CRM、SPC、HLC、POMS、HUB、NOMI 等已登记系统发送同步任务；任何系统失败都进入重试或人工处理，不得显示为已完成。
+
 ### POST /integrations/m13（M13 → M01，独立 HMAC）
 Agent 注册/撤销。字段：`event_id, tenant_id, type(agent.registered|agent.revoked), agent_id, owner_person_id, parent_agent_id(可选), scopes[]`。
 
@@ -55,7 +93,28 @@ Agent 注册/撤销。字段：`event_id, tenant_id, type(agent.registered|agent
 `{ principal_id, reason }` → 立即撤权：人员撤销级联其全部 Agent；Agent 撤销级联子 Agent。撤权后所有决策端 DENY。
 
 ### POST /kernel/v1/approvals
-**501 Not Implemented**（台账 R08）：DEMO 未实现 maker-checker 审批票据，高风险动作保持 REQUIRE_APPROVAL / fail-closed。
+创建 maker-checker 审批票据。DEMO 中票据保存在内存，正式版须迁移到 M01 持久化存储并接入 M02/EDP 审计证据。
+
+请求：
+
+```json
+{
+  "tenant_id": "TENANT_A",
+  "requester_id": "P_REQUESTER",
+  "resource": "master",
+  "action": "principal.revoke",
+  "object_id": "P_5002",
+  "parameters": { "principal_id": "P_5002" }
+}
+```
+
+响应 201：返回 `approval_id`、`PENDING` 状态和 `parameters_hash`。OIDC 模式下 `tenant_id` 与 `requester_id` 必须从已验证 Principal 推导，忽略请求体中的同名身份字段。
+
+### POST /kernel/v1/approvals/:approval_id/decision
+审批或拒绝票据：`{ tenant_id, approver_id, decision: "APPROVE"|"REJECT", comment? }`。申请人不得审批自己的票据；OIDC 模式下审批人由 Token 推导，并要求 `m01:admin`。
+
+### GET /kernel/v1/approvals
+按租户查询审批台账。DEMO 可用 `?tenant_id=TENANT_A`，OIDC 模式下租户由 Token 推导并要求 `m01:admin`。
 
 ### POST /kernel/v1/master/say（负责人 ⇄ 总控 Agent 自然语言对话）
 `{ tenant_id, text }` → 对话式指令（交互范式移植自 multica Mika 总控智能体 quick_actions 协议）：
@@ -88,7 +147,7 @@ Agent 注册/撤销。字段：`event_id, tenant_id, type(agent.registered|agent
 | capabilities.query / authorize.check | principal_id[, resource, action] | POMS 通道查询/判权 |
 | system.status / audit.tail | [limit] | 系统观测 |
 
-**红线**：高风险指令（▲）必须持批准票据，DEMO 审批为 501 → 无票据 `REQUIRE_APPROVAL` 不执行、持票据 `DENY`（总控不能绕过 maker-checker）；总控被撤权后一切指令 DENY；跨租户指令 DENY；每条指令独立 trace_id 进审计（`master.command`）。
+**红线**：高风险指令（▲）必须持与租户、动作、对象和参数摘要完全匹配的批准票据；无票据 `REQUIRE_APPROVAL`，票据缺失/未批准/已消费/绑定不匹配均 `DENY`（总控不能绕过 maker-checker）；总控被撤权后一切指令 DENY；跨租户指令 DENY；每条指令独立 trace_id 进审计（`master.command`）。
 
 ### GET /kernel/v1/status | GET /kernel/v1/audit
 运行状态摘要 / 最近 100 条审计记录（均需管理令牌）。
@@ -98,4 +157,4 @@ Agent 注册/撤销。字段：`event_id, tenant_id, type(agent.registered|agent
 - 高风险清单：`data.export`、`payment.execute`、`device.control`。
 
 ## 4. 已知边界（不得视为生产契约）
-内存存储、无时间戳/nonce 防重放（R05）、单管理令牌（R01）、无 OIDC/MFA、无 M02 Outbox（R06）、审批 501（R08）、ABAC 简化（R09）。
+内存存储、无时间戳/nonce 防重放（R05）、单管理令牌（R01）、无 M02 Outbox（R06）、审批票据尚未持久化（R08）、ABAC 简化（R09）。

@@ -1,12 +1,71 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aeos-m01-postgres
+    environment:
+      POSTGRES_DB: "${M01_POSTGRES_DB:-m01}"
+      POSTGRES_USER: "${M01_POSTGRES_USER:-m01}"
+      POSTGRES_PASSWORD: "${M01_POSTGRES_PASSWORD:?set M01_POSTGRES_PASSWORD in .env}"
+    volumes:
+      - m01-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
   m01-kernel:
     build: .
+    container_name: aeos-m01-kernel
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "3101:3101"
     environment:
+      M01_MODE: "${M01_MODE:-demo}"
       PORT: "3101"
       HOST: "0.0.0.0"
-      M01_ADMIN_TOKEN: "${M01_ADMIN_TOKEN:?set M01_ADMIN_TOKEN in .env}"
+      M01_DATABASE_URL: "${M01_DATABASE_URL:-postgres://${M01_POSTGRES_USER:-m01}:${M01_POSTGRES_PASSWORD}@postgres:5432/${M01_POSTGRES_DB:-m01}}"
+      M01_ADMIN_TOKEN: "${M01_ADMIN_TOKEN:-}"
+      M01_DEMO_ONE_CLICK_LOGIN: "${M01_DEMO_ONE_CLICK_LOGIN:-true}"
       M07_WEBHOOK_SECRET: "${M07_WEBHOOK_SECRET:?set M07_WEBHOOK_SECRET in .env}"
       M13_WEBHOOK_SECRET: "${M13_WEBHOOK_SECRET:?set M13_WEBHOOK_SECRET in .env}"
+      M01_PRIMARY_OWNER_ENABLED: "${M01_PRIMARY_OWNER_ENABLED:-true}"
+      M01_PRIMARY_TENANT_ID: "${M01_PRIMARY_TENANT_ID:-TENANT_A}"
+      M01_PRIMARY_TENANT_NAME: "${M01_PRIMARY_TENANT_NAME:-恒剑光电}"
+      M01_PRIMARY_OWNER_PERSON_ID: "${M01_PRIMARY_OWNER_PERSON_ID:-P_OWNER}"
+      M01_PRIMARY_OWNER_NAME: "${M01_PRIMARY_OWNER_NAME:-朱剑军}"
+      M01_OIDC_ISSUER: "${M01_OIDC_ISSUER:-}"
+      M01_OIDC_AUDIENCE: "${M01_OIDC_AUDIENCE:-}"
+      M01_OIDC_JWKS_URI: "${M01_OIDC_JWKS_URI:-}"
+      M01_OIDC_CLIENT_ID: "${M01_OIDC_CLIENT_ID:-}"
+      M01_OIDC_REDIRECT_URI: "${M01_OIDC_REDIRECT_URI:-}"
+      M01_OIDC_AUTHORIZATION_ENDPOINT: "${M01_OIDC_AUTHORIZATION_ENDPOINT:-}"
+      M01_OIDC_TOKEN_ENDPOINT: "${M01_OIDC_TOKEN_ENDPOINT:-}"
+      M01_OIDC_SCOPES: "${M01_OIDC_SCOPES:-openid profile email m01:policy:read}"
+      M01_EXTERNAL_IDENTITIES_JSON: "${M01_EXTERNAL_IDENTITIES_JSON:-}"
+      M01_EBMS_SOURCE_DIR: "${M01_EBMS_SOURCE_DIR:-/data/ebms}"
+      M01_EBMS_TENANT_ID: "${M01_EBMS_TENANT_ID:-TENANT_A}"
+      M01_EBMS_IMPORT_STATUS: "${M01_EBMS_IMPORT_STATUS:-all}"
+      M01_EBMS_IMPORT_ACCOUNT: "${M01_EBMS_IMPORT_ACCOUNT:-all}"
+      M01_EBMS_IMPORT_DEPARTMENT: "${M01_EBMS_IMPORT_DEPARTMENT:-}"
+      # M01 已审批离职结果回写 EBMS；URL 为 EBMS 服务地址，令牌必须与 EBMS 一致
+      M01_EBMS_SYNC_URL: "${M01_EBMS_SYNC_URL:-http://host.docker.internal:3010}"
+      M01_EBMS_SYNC_TOKEN: "${M01_EBMS_SYNC_TOKEN:?set M01_EBMS_SYNC_TOKEN in .env}"
+      AEOS_PERSON_LIFECYCLE_URL: "${AEOS_PERSON_LIFECYCLE_URL:-}"
+      AEOS_PERSON_LIFECYCLE_KEY_ID: "${AEOS_PERSON_LIFECYCLE_KEY_ID:-m01-kernel}"
+      AEOS_PERSON_LIFECYCLE_SECRET: "${AEOS_PERSON_LIFECYCLE_SECRET:-}"
+      M01_EBMS_DIRECT_COMPAT: "${M01_EBMS_DIRECT_COMPAT:-false}"
+    volumes:
+      - "../../EBMS-aeos-phase1/database/database:/data/ebms:ro"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3101/readyz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     restart: unless-stopped
+
+volumes:
+  m01-postgres-data:
