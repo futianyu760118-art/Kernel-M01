@@ -346,7 +346,21 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
           return;
         }
         const beforeState = snapshotBeforeMutation();
-        const result = pathname === '/integrations/m07' ? kernel.applyM07Event(parsed.data) : kernel.applyM13Event(parsed.data);
+        const result = pathname === '/integrations/m07' && parsed.data.type === 'person.change.request'
+          ? kernel.submitPersonChangeRequest({
+            tenant_id: parsed.data.tenant_id,
+            requester_id: parsed.data.requester_id,
+            person_id: parsed.data.person_id,
+            action: parsed.data.action,
+            department_id: parsed.data.department_id,
+            position_id: parsed.data.position_id,
+            job_title: parsed.data.job_title,
+            effective_at: parsed.data.effective_at,
+            reason: parsed.data.reason,
+            idempotency_key: parsed.data.idempotency_key,
+            source: 'M07'
+          })
+          : pathname === '/integrations/m07' ? kernel.applyM07Event(parsed.data) : kernel.applyM13Event(parsed.data);
         if (result.ok !== false && !(await persistOr503(res, beforeState))) return;
         send(res, result.ok === false ? result.status || 400 : 200, result.ok === false ? { error: result.error } : result);
         return;
@@ -415,7 +429,8 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
         const adminRoute = pathname === '/kernel/v1/status' || pathname === '/kernel/v1/audit' || pathname === '/kernel/v1/revocations';
         const masterRoute = pathname.startsWith('/kernel/v1/master/');
         const quickRoute = pathname === '/kernel/v1/quick/person-action';
-        if (mode === 'oidc' && (adminRoute || masterRoute || quickRoute) && !hasScope(principal, adminScope)) {
+        const changeRequestRoute = pathname === '/kernel/v1/person-change-requests' || /^\/kernel\/v1\/person-change-requests\/[^/]+\/decision$/.test(pathname);
+        if (mode === 'oidc' && (adminRoute || masterRoute || quickRoute || changeRequestRoute) && !hasScope(principal, adminScope)) {
           send(res, 403, { error: 'missing admin scope' });
           return;
         }
@@ -436,6 +451,11 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
         }
         if (req.method === 'GET' && pathname === '/kernel/v1/audit') {
           send(res, 200, { entries: kernel.auditLog.slice(-100), total: kernel.auditLog.length });
+          return;
+        }
+        if (pathname === '/kernel/v1/person-change-requests' && req.method === 'GET') {
+          const tenant_id = mode === 'oidc' ? principal.tenant_id : url.searchParams.get('tenant_id') || 'TENANT_A';
+          send(res, 200, { requests: kernel.listPersonChangeRequests(tenant_id) });
           return;
         }
         if (req.method !== 'POST') {
@@ -469,6 +489,41 @@ export function createApp(kernel = new M01Kernel(), config = {}) {
               body.principal_id = principal.principal_id;
             }
           }
+        }
+        if (pathname === '/kernel/v1/person-change-requests' && req.method === 'POST') {
+          const tenant_id = mode === 'oidc' ? principal.tenant_id : body.tenant_id || 'TENANT_A';
+          const beforeState = snapshotBeforeMutation();
+          const result = kernel.submitPersonChangeRequest({
+            tenant_id,
+            requester_id: mode === 'oidc' ? principal.principal_id : body.requester_id || demoRequesterPersonId,
+            person_id: body.person_id,
+            action: body.action,
+            department_id: body.department_id,
+            position_id: body.position_id,
+            job_title: body.job_title,
+            effective_at: body.effective_at,
+            reason: body.reason,
+            idempotency_key: body.idempotency_key,
+            source: 'M01'
+          });
+          if (result.ok && !(await persistOr503(res, beforeState))) return;
+          send(res, result.ok ? 201 : result.status || 400, result.ok ? result : { error: result.error });
+          return;
+        }
+        const changeDecisionPath = pathname.match(/^\/kernel\/v1\/person-change-requests\/([^/]+)\/decision$/);
+        if (changeDecisionPath && req.method === 'POST') {
+          const tenant_id = mode === 'oidc' ? principal.tenant_id : body.tenant_id || 'TENANT_A';
+          const beforeState = snapshotBeforeMutation();
+          const result = kernel.decidePersonChangeRequest({
+            tenant_id,
+            request_id: decodeURIComponent(changeDecisionPath[1]),
+            approver_id: mode === 'oidc' ? principal.principal_id : body.approver_id,
+            decision: body.decision,
+            comment: body.comment
+          });
+          if (result.ok && !(await persistOr503(res, beforeState))) return;
+          send(res, result.ok ? 200 : result.status || 400, result.ok ? result : { error: result.error });
+          return;
         }
         if (pathname === '/kernel/v1/quick/person-action') {
           const actionMap = {

@@ -10,8 +10,9 @@
   "scripts": {
     "start": "node src/server.js",
     "smoke:docker": "node scripts/smoke.mjs",
-    "test": "node --test test/integration.test.js test/master-agent.test.js test/master-say.test.js test/approvals.test.js test/legacy-import.test.js test/state-schema.test.js test/persistence-server.test.js test/oidc.test.js test/oidc-formal.test.js test/primary-owner.test.js test/human-labels.test.js test/quick-actions.test.js test/m01-ebms-sync.test.js test/offboard-profile.test.js test/person-lifecycle.test.js",
-    "test:postgres": "node --test test/postgres-store.test.js"
+    "test": "node --test test/integration.test.js test/master-agent.test.js test/master-say.test.js test/approvals.test.js test/legacy-import.test.js test/state-schema.test.js test/persistence-server.test.js test/oidc.test.js test/oidc-formal.test.js test/primary-owner.test.js test/human-labels.test.js test/quick-actions.test.js test/m01-ebms-sync.test.js test/offboard-profile.test.js test/person-lifecycle.test.js test/person-change-request.test.js",
+    "test:postgres": "node --test test/postgres-store.test.js",
+    "test:person-change-request": "node --test test/person-change-request.test.js"
   },
   "dependencies": {
     "pg": "^8.16.3"

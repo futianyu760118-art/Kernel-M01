@@ -22,6 +22,7 @@ export function parseKernelState(input) {
     validateMapEntries(input[field], field);
   }
   if (input.externalIdentities !== undefined) validateMapEntries(input.externalIdentities, 'externalIdentities');
+  if (input.personChangeRequests !== undefined) validateMapEntries(input.personChangeRequests, 'personChangeRequests');
   if (!Array.isArray(input.auditLog)) throw new Error('kernel state auditLog must be an array');
   if (input.personLifecycleOutbox !== undefined && !Array.isArray(input.personLifecycleOutbox)) {
     throw new Error('kernel state personLifecycleOutbox must be an array');
@@ -37,6 +38,7 @@ export function parseKernelState(input) {
     events: clone(input.events),
     revocations: clone(input.revocations),
     approvals: clone(input.approvals),
+    personChangeRequests: clone(input.personChangeRequests || []),
     externalIdentities: clone(input.externalIdentities || []),
     personLifecycleOutbox: clone(input.personLifecycleOutbox || []),
     auditLog: clone(input.auditLog),

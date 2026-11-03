@@ -22,6 +22,7 @@ export const HIGH_RISK_COMMANDS = new Set(['person.offboard', 'person.reinstate'
 
 const M07_EVENT_TYPES = new Set(['person.hired', 'person.transferred', 'person.offboarded']);
 const M13_EVENT_TYPES = new Set(['agent.registered', 'agent.revoked']);
+const PERSON_CHANGE_ACTIONS = new Set(['hire', 'transfer', 'offboard', 'reinstate', 'rehire']);
 
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -44,6 +45,7 @@ export class M01Kernel {
     this.events = new Map();
     this.revocations = new Map();
     this.approvals = new Map();
+    this.personChangeRequests = new Map();
     this.externalIdentities = new Map();
     this.personLifecycleOutbox = [];
     this.auditLog = [];
@@ -224,6 +226,7 @@ export class M01Kernel {
       events: [...this.events.entries()],
       revocations: [...this.revocations.entries()],
       approvals: [...this.approvals.entries()],
+      personChangeRequests: [...this.personChangeRequests.entries()],
       externalIdentities: [...this.externalIdentities.entries()],
       personLifecycleOutbox: this.personLifecycleOutbox,
       auditLog: this.auditLog,
@@ -239,6 +242,7 @@ export class M01Kernel {
     this.events = new Map(state.events);
     this.revocations = new Map(state.revocations);
     this.approvals = new Map(state.approvals);
+    this.personChangeRequests = new Map(state.personChangeRequests || []);
     this.externalIdentities = new Map(state.externalIdentities || []);
     this.personLifecycleOutbox = state.personLifecycleOutbox || [];
     this.auditLog = state.auditLog;
@@ -366,6 +370,121 @@ export class M01Kernel {
     this.approvals.set(approval.approval_id, approval);
     this._audit({ kind: 'approval.requested', trace_id: randomUUID(), ...this._approvalView(approval) });
     return { ok: true, approval: this._approvalView(approval) };
+  }
+
+  submitPersonChangeRequest({
+    tenant_id,
+    requester_id,
+    person_id,
+    action,
+    department_id,
+    position_id,
+    job_title,
+    effective_at,
+    reason,
+    idempotency_key,
+    source = 'M01'
+  }) {
+    const normalizedAction = String(action || '').toLowerCase();
+    const required = { tenant_id, requester_id, person_id, department_id, position_id, job_title, effective_at, reason, idempotency_key };
+    const missing = Object.entries(required).find(([, value]) => value === undefined || value === null || String(value).trim() === '');
+    if (missing) return { ok: false, status: 400, error: `required: ${missing[0]}` };
+    if (!PERSON_CHANGE_ACTIONS.has(normalizedAction)) return { ok: false, status: 400, error: '不支持的人员变动类型' };
+    const requester = this.persons.get(String(requester_id));
+    if (requester && (requester.tenant_id !== tenant_id || requester.status !== 'active')) {
+      return { ok: false, status: 403, error: '提交人不是本单位在职人员' };
+    }
+    const duplicate = [...this.personChangeRequests.values()].find((item) => item.tenant_id === tenant_id && item.idempotency_key === String(idempotency_key));
+    if (duplicate) return { ok: true, idempotent: true, request: this._personChangeRequestView(duplicate) };
+    if (normalizedAction !== 'hire' && !this.persons.has(String(person_id))) {
+      return { ok: false, status: 404, error: '找不到要办理的人员' };
+    }
+    const effectiveDate = new Date(effective_at);
+    if (Number.isNaN(effectiveDate.getTime())) return { ok: false, status: 400, error: '生效时间不正确' };
+    const request = {
+      request_id: `PCR_${randomUUID()}`,
+      tenant_id: String(tenant_id),
+      requester_id: String(requester_id),
+      person_id: String(person_id),
+      action: normalizedAction === 'rehire' ? 'reinstate' : normalizedAction,
+      department_id: String(department_id),
+      position_id: String(position_id),
+      job_title: String(job_title),
+      effective_at: effectiveDate.toISOString(),
+      reason: String(reason).slice(0, 500),
+      idempotency_key: String(idempotency_key),
+      source: String(source || 'M01'),
+      status: 'PENDING',
+      created_at: new Date().toISOString(),
+      decided_at: null,
+      decided_by: null,
+      comment: null,
+      result: null
+    };
+    this.personChangeRequests.set(request.request_id, request);
+    this._audit({ kind: 'person.change.requested', request_id: request.request_id, tenant_id, person_id, action: request.action, source });
+    return { ok: true, idempotent: false, request: this._personChangeRequestView(request) };
+  }
+
+  decidePersonChangeRequest({ tenant_id, request_id, approver_id, decision, comment }) {
+    const request = this.personChangeRequests.get(request_id);
+    if (!request) return { ok: false, status: 404, error: '找不到人员变动申请' };
+    if (request.tenant_id !== tenant_id) return { ok: false, status: 403, error: '申请不属于当前单位' };
+    if (!approver_id || request.requester_id === String(approver_id)) return { ok: false, status: 403, error: '提交人不能审批自己的申请' };
+    if (request.status !== 'PENDING') return { ok: false, status: 409, error: '申请已经处理过了' };
+    const normalized = String(decision || '').toUpperCase();
+    if (!['APPROVE', 'REJECT'].includes(normalized)) return { ok: false, status: 400, error: '审批结果只能是同意或拒绝' };
+    request.decided_at = new Date().toISOString();
+    request.decided_by = String(approver_id);
+    request.comment = String(comment || '').slice(0, 500) || null;
+    if (normalized === 'REJECT') {
+      request.status = 'REJECTED';
+      request.result = { status: 'skipped', target_system: 'M01_KERNEL', changed: {}, received_at: request.decided_at, reason: '管理员拒绝办理' };
+      this._audit({ kind: 'person.change.rejected', request_id, decided_by: approver_id });
+      return { ok: true, request: this._personChangeRequestView(request) };
+    }
+    const person = this.persons.get(request.person_id);
+    let result;
+    if (request.action === 'offboard' || request.action === 'reinstate') {
+      result = applyPersonLifecycleTransition(this, request.person_id, request.action, request.effective_at, String(approver_id), randomUUID());
+    } else {
+      result = this.applyM07Event({
+        event_id: `EVT_PCR_${randomUUID()}`,
+        tenant_id: request.tenant_id,
+        type: request.action === 'hire' ? 'person.hired' : 'person.transferred',
+        person_id: request.person_id,
+        position_id: request.position_id,
+        seq: Date.now(),
+        profile: { department_id: request.department_id, job_title: request.job_title }
+      });
+    }
+    if (result.ok === false) {
+      request.status = 'FAILED';
+      request.result = { status: 'failed', target_system: 'M01_KERNEL', changed: {}, received_at: request.decided_at, reason: result.error };
+    } else {
+      request.status = result.status === 'scheduled' ? 'SCHEDULED' : 'COMPLETED';
+      if (person) person.profile = { ...(person.profile || {}), department_id: request.department_id, job_title: request.job_title };
+      request.result = { status: result.status === 'pending_confirmation' ? 'pending_confirmation' : 'synced', target_system: 'M01_KERNEL', changed: { person: 1 }, received_at: request.decided_at, result };
+    }
+    this._audit({ kind: 'person.change.processed', request_id, status: request.status, decided_by: approver_id });
+    return { ok: request.status !== 'FAILED', status: request.status === 'FAILED' ? 409 : 200, request: this._personChangeRequestView(request) };
+  }
+
+  listPersonChangeRequests(tenant_id) {
+    return [...this.personChangeRequests.values()]
+      .filter((item) => item.tenant_id === String(tenant_id))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+      .map((item) => this._personChangeRequestView(item));
+  }
+
+  _personChangeRequestView(request) {
+    return {
+      request_id: request.request_id, tenant_id: request.tenant_id, requester_id: request.requester_id,
+      person_id: request.person_id, action: request.action, department_id: request.department_id,
+      position_id: request.position_id, job_title: request.job_title, effective_at: request.effective_at,
+      reason: request.reason, source: request.source, status: request.status, created_at: request.created_at,
+      decided_at: request.decided_at, decided_by: request.decided_by, comment: request.comment, result: request.result
+    };
   }
 
   decideApproval({ tenant_id, approval_id, approver_id, decision, comment }) {
