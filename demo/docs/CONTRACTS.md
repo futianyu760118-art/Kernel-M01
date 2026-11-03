@@ -30,6 +30,44 @@
 
 响应 200：`{ ok, idempotent, stale?, applied, person }`；400 字段错误；401 验签失败；403 租户冲突。
 
+#### M07 提交人员变动申请
+
+离职、复职、入职和调岗，统一先进入 M01 的“人员变动申请”。M07 只负责填写资料和提交，M01 负责审核、办理和记录结果。申请资料必须写清楚：
+
+```json
+{
+  "type": "person.change.request",
+  "tenant_id": "TENANT_A",
+  "requester_id": "P_HR_001",
+  "person_id": "P_1001",
+  "action": "offboard",
+  "department_id": "D_SALES",
+  "position_id": "POS_SALES",
+  "job_title": "销售经理",
+  "effective_at": "2026-11-03T09:00:00+08:00",
+  "reason": "员工离职",
+  "idempotency_key": "TENANT_A:P_1001:offboard:20261103"
+}
+```
+
+`action` 只能填写 `hire`（入职）、`transfer`（调岗）、`offboard`（离职）或 `reinstate`（复职）。M01 收到后先保存为 `PENDING`（待审批），没有审批通过前，不改变人员状态。重复提交同一个 `idempotency_key` 只返回原申请，不重复办理。
+
+M01 审核通过后才会办理，并把结果返回给 M07；拒绝则只记录原因，不改变人员状态。审核人不能是提交人。
+
+### POST /kernel/v1/person-change-requests（M01 直接发起）
+
+管理员也可以不经过 M07，直接在 M01 填写同一份资料。字段与上面相同（不填写 `type`），仍然进入同一个申请列表、使用同一套审核规则和同步结果。
+
+### GET /kernel/v1/person-change-requests?tenant_id=TENANT_A（查看申请）
+
+查看待审批、已完成、已拒绝和办理失败的申请。页面应把状态显示为“待审批、办理中、已完成、已拒绝、办理失败”，不要显示内部英文状态。
+
+### POST /kernel/v1/person-change-requests/:request_id/decision（M01 审核并办理）
+
+请求：`{ "tenant_id": "TENANT_A", "approver_id": "P_OWNER", "decision": "APPROVE|REJECT", "comment": "说明" }`。
+
+同意后 M01 才执行人员状态变更，并向 EDP、EBMS、CRM、SPC、HLC、POMS、HUB、NOMI 等已登记系统发送同步任务；任何系统失败都进入重试或人工处理，不得显示为已完成。
+
 ### POST /integrations/m13（M13 → M01，独立 HMAC）
 Agent 注册/撤销。字段：`event_id, tenant_id, type(agent.registered|agent.revoked), agent_id, owner_person_id, parent_agent_id(可选), scopes[]`。
 
