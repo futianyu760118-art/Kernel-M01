@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { KernelStateVersion, parseKernelState } from './state-schema.js';
+import { applyPersonLifecycleTransition } from './person-lifecycle-event.js';
 
 export const HIGH_RISK_ACTIONS = new Set(['data.export', 'payment.execute', 'device.control']);
 
@@ -7,6 +9,7 @@ export const MASTER_COMMANDS = new Set([
   'person.hire',
   'person.transfer',
   'person.offboard',
+  'person.reinstate',
   'agent.register',
   'agent.revoke',
   'principal.revoke',
@@ -15,18 +18,36 @@ export const MASTER_COMMANDS = new Set([
   'system.status',
   'audit.tail'
 ]);
-export const HIGH_RISK_COMMANDS = new Set(['person.offboard', 'agent.revoke', 'principal.revoke']);
+export const HIGH_RISK_COMMANDS = new Set(['person.offboard', 'person.reinstate', 'agent.revoke', 'principal.revoke']);
 
 const M07_EVENT_TYPES = new Set(['person.hired', 'person.transferred', 'person.offboarded']);
 const M13_EVENT_TYPES = new Set(['agent.registered', 'agent.revoked']);
+const PERSON_CHANGE_ACTIONS = new Set(['hire', 'transfer', 'offboard', 'reinstate', 'rehire']);
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  }
+  return value;
+}
+
+function parametersHash(parameters = {}) {
+  return createHash('sha256').update(JSON.stringify(canonicalize(parameters))).digest('hex');
+}
 
 export class M01Kernel {
-  constructor() {
+  constructor({ allowImplicitOwner = true } = {}) {
+    this.allowImplicitOwner = allowImplicitOwner;
     this.positions = new Map();
     this.persons = new Map();
     this.agents = new Map();
     this.events = new Map();
     this.revocations = new Map();
+    this.approvals = new Map();
+    this.personChangeRequests = new Map();
+    this.externalIdentities = new Map();
+    this.personLifecycleOutbox = [];
     this.auditLog = [];
     this.master = null;
     this._seedPositions();
@@ -36,7 +57,7 @@ export class M01Kernel {
     this.positions.set('POS_STAFF', {
       position_id: 'POS_STAFF',
       tenant_id: 'TENANT_A',
-      name: 'Staff',
+      name: '普通员工',
       capabilities: [
         { resource: 'task', action: 'execute' },
         { resource: 'report', action: 'read' }
@@ -45,7 +66,7 @@ export class M01Kernel {
     this.positions.set('POS_MANAGER', {
       position_id: 'POS_MANAGER',
       tenant_id: 'TENANT_A',
-      name: 'Manager',
+      name: '经理',
       capabilities: [
         { resource: 'task', action: 'execute' },
         { resource: 'report', action: 'read' },
@@ -56,21 +77,106 @@ export class M01Kernel {
     this.positions.set('POS_OWNER', {
       position_id: 'POS_OWNER',
       tenant_id: 'TENANT_A',
-      name: 'Owner',
-      capabilities: [{ resource: 'report', action: 'read' }]
+      name: '管理员兼总经理',
+      capabilities: [
+        { resource: 'task', action: 'execute' },
+        { resource: 'report', action: 'read' },
+        { resource: 'report', action: 'approve' },
+        { resource: 'data', action: 'export' },
+        { resource: 'device', action: 'control' }
+      ]
     });
   }
 
-  registerMaster({ tenant_id, owner_person_id }) {
+  ensurePrimaryOwner({ tenant_id, organization_name, person_id, display_name, employee_code = null }) {
+    if (![tenant_id, organization_name, person_id, display_name].every((value) => typeof value === 'string' && value.trim())) {
+      return { ok: false, error: 'required: tenant_id, organization_name, person_id, display_name', status: 400 };
+    }
+    if (!this.positions.has('POS_OWNER')) return { ok: false, error: 'POS_OWNER not seeded', status: 500 };
+    const ownerPosition = this.positions.get('POS_OWNER');
+    const ownerCapabilities = [
+      { resource: 'task', action: 'execute' },
+      { resource: 'report', action: 'read' },
+      { resource: 'report', action: 'approve' },
+      { resource: 'data', action: 'export' },
+      { resource: 'device', action: 'control' }
+    ];
+    const positionChanged = ownerPosition.name !== '管理员兼总经理' || JSON.stringify(ownerPosition.capabilities) !== JSON.stringify(ownerCapabilities);
+    ownerPosition.name = '管理员兼总经理';
+    ownerPosition.capabilities = ownerCapabilities;
+    const profile = {
+      source_system: 'M01',
+      source_table: 'primary_owner',
+      display_name,
+      organization_name,
+      employee_code,
+      role_names: ['管理员', '总经理'],
+      account: { match_type: 'manual', username: null }
+    };
+    const existing = this.persons.get(person_id);
+    if (!existing) {
+      const event = this.applyM07Event({
+        event_id: `M01_PRIMARY_OWNER_V1_${person_id}`,
+        tenant_id,
+        type: 'person.hired',
+        person_id,
+        position_id: 'POS_OWNER',
+        seq: 1,
+        profile
+      });
+      if (event.ok === false) return event;
+      this._audit({ kind: 'm01.primary_owner.bootstrapped', tenant_id, person_id, organization_name, display_name });
+      return { ok: true, changed: true, idempotent: false, person: this._personView(this.persons.get(person_id)) };
+    }
+    if (existing.tenant_id !== tenant_id) return { ok: false, error: 'primary owner tenant mismatch', status: 403 };
+    if (existing.status !== 'active') return { ok: false, error: 'primary owner is not active', status: 403 };
+    const previousProfile = JSON.stringify(existing.profile || {});
+    const personPositionChanged = existing.position_id !== 'POS_OWNER';
+    existing.position_id = 'POS_OWNER';
+    existing.profile = { ...(existing.profile || {}), ...profile };
+    if (personPositionChanged || positionChanged) this._bumpAuthorizationVersion(person_id, 'primary owner role initialized');
+    const changed = positionChanged || personPositionChanged || previousProfile !== JSON.stringify(existing.profile);
+    if (changed) this._audit({ kind: 'm01.primary_owner.updated', tenant_id, person_id, organization_name, display_name });
+    return { ok: true, changed, idempotent: !changed, person: this._personView(existing) };
+  }
+
+  mapExternalIdentity({ issuer, subject, principal_id, tenant_id }) {
+    if (![issuer, subject, principal_id, tenant_id].every((value) => typeof value === 'string' && value.trim())) {
+      return { ok: false, error: 'required: issuer, subject, principal_id, tenant_id', status: 400 };
+    }
+    const key = `${issuer}\u0000${subject}`;
+    const existing = this.externalIdentities.get(key);
+    if (existing && (existing.principal_id !== principal_id || existing.tenant_id !== tenant_id)) {
+      return { ok: false, error: 'external identity is already mapped to another principal', status: 409 };
+    }
+    if (existing) return { ok: true, idempotent: true, mapping: existing };
+    const mapping = { issuer, subject, principal_id, tenant_id, status: 'active' };
+    this.externalIdentities.set(key, mapping);
+    this._audit({ kind: 'identity.external_mapped', issuer, subject, principal_id, tenant_id });
+    return { ok: true, mapping };
+  }
+
+  resolveExternalIdentity({ issuer, subject }) {
+    if (typeof issuer !== 'string' || typeof subject !== 'string') return null;
+    return this.externalIdentities.get(`${issuer}\u0000${subject}`) || null;
+  }
+
+  registerMaster({ tenant_id, owner_person_id, master_agent_id = MASTER_AGENT_ID, idempotency_key = null }) {
     if (!tenant_id || !owner_person_id) {
       return { ok: false, error: 'required: tenant_id, owner_person_id', status: 400 };
+    }
+    if (master_agent_id !== MASTER_AGENT_ID) {
+      return { ok: false, error: `master_agent_id must be ${MASTER_AGENT_ID}`, status: 400 };
     }
     if (!this.positions.has('POS_OWNER')) {
       return { ok: false, error: 'POS_OWNER not seeded', status: 500 };
     }
     let owner = this.persons.get(owner_person_id);
     if (!owner) {
-      owner = { person_id: owner_person_id, tenant_id, status: 'active', position_id: 'POS_OWNER', seq: 0 };
+      if (!this.allowImplicitOwner) {
+        return { ok: false, error: 'owner person must already exist and be active in formal mode', status: 403 };
+      }
+      owner = { person_id: owner_person_id, tenant_id, status: 'active', position_id: 'POS_OWNER', seq: 0, authz_version: 1 };
       this.persons.set(owner_person_id, owner);
     }
     if (owner.tenant_id !== tenant_id) {
@@ -79,17 +185,68 @@ export class M01Kernel {
     if (owner.status !== 'active') {
       return { ok: false, error: 'owner person is not active', status: 403 };
     }
+    const existingMaster = this.agents.get(MASTER_AGENT_ID);
+    if (existingMaster?.status === 'active' && existingMaster.tenant_id === tenant_id && existingMaster.owner_person_id === owner_person_id) {
+      return {
+        ok: true,
+        state: 'active',
+        idempotent: true,
+        idempotency_key,
+        trace_id: randomUUID(),
+        master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: existingMaster.authz_version, commands: existingMaster.scopes }
+      };
+    }
+    if (existingMaster?.status === 'revoked' && !this.allowImplicitOwner) {
+      return { ok: false, error: 'master agent is revoked and cannot be restored by registration', status: 403 };
+    }
+    const masterAuthzVersion = Number.isInteger(existingMaster?.authz_version) && existingMaster.authz_version > 0
+      ? existingMaster.authz_version
+      : 1;
     this.master = {
       agent_id: MASTER_AGENT_ID,
       tenant_id,
       owner_person_id,
       scopes: [...MASTER_COMMANDS],
       status: 'active',
+      authz_version: masterAuthzVersion,
       registered_at: new Date().toISOString()
     };
     this.agents.set(MASTER_AGENT_ID, this.master);
-    this._audit({ kind: 'master.registered', tenant_id, master_agent_id: MASTER_AGENT_ID, owner_person_id, scopes: this.master.scopes });
-    return { ok: true, master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', commands: this.master.scopes } };
+    const trace_id = randomUUID();
+    this._audit({ kind: 'master.registered', trace_id, tenant_id, master_agent_id: MASTER_AGENT_ID, owner_person_id, scopes: this.master.scopes });
+    return { ok: true, state: 'active', idempotent: false, idempotency_key, trace_id, master: { agent_id: MASTER_AGENT_ID, tenant_id, owner_person_id, status: 'active', authz_version: masterAuthzVersion, commands: this.master.scopes } };
+  }
+
+  exportState() {
+    return parseKernelState({
+      version: KernelStateVersion,
+      positions: [...this.positions.entries()],
+      persons: [...this.persons.entries()],
+      agents: [...this.agents.entries()],
+      events: [...this.events.entries()],
+      revocations: [...this.revocations.entries()],
+      approvals: [...this.approvals.entries()],
+      personChangeRequests: [...this.personChangeRequests.entries()],
+      externalIdentities: [...this.externalIdentities.entries()],
+      personLifecycleOutbox: this.personLifecycleOutbox,
+      auditLog: this.auditLog,
+      master: this.master
+    });
+  }
+
+  restoreState(input) {
+    const state = parseKernelState(input);
+    this.positions = new Map(state.positions);
+    this.persons = new Map(state.persons);
+    this.agents = new Map(state.agents);
+    this.events = new Map(state.events);
+    this.revocations = new Map(state.revocations);
+    this.approvals = new Map(state.approvals);
+    this.personChangeRequests = new Map(state.personChangeRequests || []);
+    this.externalIdentities = new Map(state.externalIdentities || []);
+    this.personLifecycleOutbox = state.personLifecycleOutbox || [];
+    this.auditLog = state.auditLog;
+    this.master = state.master ? (this.agents.get(state.master.agent_id) || state.master) : null;
   }
 
   dispatchCommand({ tenant_id, command, params }) {
@@ -115,11 +272,17 @@ export class M01Kernel {
     if (!owner || owner.status !== 'active') {
       return finish('DENY', 'owner (负责人) is not active');
     }
-    if (HIGH_RISK_COMMANDS.has(command) && !params?.approval_ticket) {
-      return finish('REQUIRE_APPROVAL', 'high-risk command needs maker-checker approval ticket; master agent cannot bypass (fail closed)');
-    }
-    if (params?.approval_ticket) {
-      return finish('DENY', 'approval workflow not implemented in DEMO (501); no valid ticket can exist');
+    if (HIGH_RISK_COMMANDS.has(command)) {
+      const binding = this._masterApprovalBinding(command, params || {});
+      if (!params?.approval_ticket) {
+        return finish('REQUIRE_APPROVAL', 'high-risk command needs maker-checker approval ticket; master agent cannot bypass (fail closed)', { approval_binding: binding });
+      }
+      const consumed = this.consumeApproval({
+        tenant_id,
+        ticket: params.approval_ticket,
+        ...binding
+      });
+      if (!consumed.ok) return finish('DENY', consumed.error);
     }
     const p = params || {};
     const evt = () => 'EVT_MASTER_' + randomUUID();
@@ -129,7 +292,9 @@ export class M01Kernel {
       case 'person.transfer':
         return this._masterWrap(trace_id, command, tenant_id, this.applyM07Event({ event_id: evt(), tenant_id, type: 'person.transferred', person_id: p.person_id, position_id: p.position_id, seq: Date.now() }));
       case 'person.offboard':
-        return this._masterWrap(trace_id, command, tenant_id, this.applyM07Event({ event_id: evt(), tenant_id, type: 'person.offboarded', person_id: p.person_id, seq: Date.now() }));
+        return this._masterWrap(trace_id, command, tenant_id, applyPersonLifecycleTransition(this, p.person_id, 'offboard', p.effective_at || new Date().toISOString(), m.owner_person_id, trace_id));
+      case 'person.reinstate':
+        return this._masterWrap(trace_id, command, tenant_id, applyPersonLifecycleTransition(this, p.person_id, 'reinstate', p.effective_at || new Date().toISOString(), m.owner_person_id, trace_id));
       case 'agent.register':
         return this._masterWrap(trace_id, command, tenant_id, this.applyM13Event({ event_id: evt(), tenant_id, type: 'agent.registered', agent_id: p.agent_id, owner_person_id: p.owner_person_id || m.owner_person_id, parent_agent_id: p.parent_agent_id || null, scopes: p.scopes || [] }));
       case 'agent.revoke':
@@ -153,6 +318,220 @@ export class M01Kernel {
       default:
         return finish('DENY', 'unreachable command branch');
     }
+  }
+
+  _masterApprovalBinding(command, params) {
+    const parameters = { ...params };
+    delete parameters.approval_ticket;
+    const object_id = parameters.person_id || parameters.agent_id || parameters.principal_id || null;
+    return { resource: 'master', action: command, object_id, parameters };
+  }
+
+  _approvalView(approval) {
+    return {
+      approval_id: approval.approval_id,
+      tenant_id: approval.tenant_id,
+      requester_id: approval.requester_id,
+      resource: approval.resource,
+      action: approval.action,
+      object_id: approval.object_id,
+      parameters_hash: approval.parameters_hash,
+      status: approval.status,
+      created_at: approval.created_at,
+      decided_at: approval.decided_at || null,
+      decided_by: approval.decided_by || null,
+      comment: approval.comment || null,
+      consumed_at: approval.consumed_at || null
+    };
+  }
+
+  createApproval({ tenant_id, requester_id, resource, action, object_id, parameters = {} }) {
+    if (!tenant_id || !requester_id || !resource || !action || !object_id) {
+      return { ok: false, status: 400, error: 'required: tenant_id, requester_id, resource, action, object_id' };
+    }
+    const principal = this.persons.get(requester_id) || this.agents.get(requester_id);
+    if (principal && principal.tenant_id !== tenant_id) {
+      return { ok: false, status: 403, error: 'requester tenant boundary violation' };
+    }
+    if (principal && principal.status !== 'active') {
+      return { ok: false, status: 403, error: 'requester is not active' };
+    }
+    const approval = {
+      approval_id: `APR_${randomUUID()}`,
+      tenant_id,
+      requester_id,
+      resource,
+      action,
+      object_id,
+      parameters_hash: parametersHash(parameters),
+      status: 'PENDING',
+      created_at: new Date().toISOString()
+    };
+    this.approvals.set(approval.approval_id, approval);
+    this._audit({ kind: 'approval.requested', trace_id: randomUUID(), ...this._approvalView(approval) });
+    return { ok: true, approval: this._approvalView(approval) };
+  }
+
+  submitPersonChangeRequest({
+    tenant_id,
+    requester_id,
+    person_id,
+    action,
+    department_id,
+    position_id,
+    job_title,
+    effective_at,
+    reason,
+    idempotency_key,
+    source = 'M01'
+  }) {
+    const normalizedAction = String(action || '').toLowerCase();
+    const required = { tenant_id, requester_id, person_id, department_id, position_id, job_title, effective_at, reason, idempotency_key };
+    const missing = Object.entries(required).find(([, value]) => value === undefined || value === null || String(value).trim() === '');
+    if (missing) return { ok: false, status: 400, error: `required: ${missing[0]}` };
+    if (!PERSON_CHANGE_ACTIONS.has(normalizedAction)) return { ok: false, status: 400, error: '不支持的人员变动类型' };
+    const requester = this.persons.get(String(requester_id));
+    if (!requester || requester.tenant_id !== tenant_id || requester.status !== 'active') {
+      return { ok: false, status: 403, error: '提交人不是本单位在职人员' };
+    }
+    const duplicate = [...this.personChangeRequests.values()].find((item) => item.tenant_id === tenant_id && item.idempotency_key === String(idempotency_key));
+    if (duplicate) return { ok: true, idempotent: true, request: this._personChangeRequestView(duplicate) };
+    if (normalizedAction !== 'hire' && !this.persons.has(String(person_id))) {
+      return { ok: false, status: 404, error: '找不到要办理的人员' };
+    }
+    const effectiveDate = new Date(effective_at);
+    if (Number.isNaN(effectiveDate.getTime())) return { ok: false, status: 400, error: '生效时间不正确' };
+    const request = {
+      request_id: `PCR_${randomUUID()}`,
+      tenant_id: String(tenant_id),
+      requester_id: String(requester_id),
+      person_id: String(person_id),
+      action: normalizedAction === 'rehire' ? 'reinstate' : normalizedAction,
+      department_id: String(department_id),
+      position_id: String(position_id),
+      job_title: String(job_title),
+      effective_at: effectiveDate.toISOString(),
+      reason: String(reason).slice(0, 500),
+      idempotency_key: String(idempotency_key),
+      source: String(source || 'M01'),
+      status: 'PENDING',
+      created_at: new Date().toISOString(),
+      decided_at: null,
+      decided_by: null,
+      comment: null,
+      result: null
+    };
+    this.personChangeRequests.set(request.request_id, request);
+    this._audit({ kind: 'person.change.requested', request_id: request.request_id, tenant_id, person_id, action: request.action, source });
+    return { ok: true, idempotent: false, request: this._personChangeRequestView(request) };
+  }
+
+  decidePersonChangeRequest({ tenant_id, request_id, approver_id, decision, comment }) {
+    const request = this.personChangeRequests.get(request_id);
+    if (!request) return { ok: false, status: 404, error: '找不到人员变动申请' };
+    if (request.tenant_id !== tenant_id) return { ok: false, status: 403, error: '申请不属于当前单位' };
+    const approver = this.persons.get(String(approver_id || ''));
+    if (!approver || approver.tenant_id !== request.tenant_id || approver.status !== 'active') {
+      return { ok: false, status: 403, error: '审批人不是本单位在职人员' };
+    }
+    if (request.requester_id === String(approver_id)) return { ok: false, status: 403, error: '提交人不能审批自己的申请' };
+    if (request.status !== 'PENDING') return { ok: false, status: 409, error: '申请已经处理过了' };
+    const normalized = String(decision || '').toUpperCase();
+    if (!['APPROVE', 'REJECT'].includes(normalized)) return { ok: false, status: 400, error: '审批结果只能是同意或拒绝' };
+    request.decided_at = new Date().toISOString();
+    request.decided_by = String(approver_id);
+    request.comment = String(comment || '').slice(0, 500) || null;
+    if (normalized === 'REJECT') {
+      request.status = 'REJECTED';
+      request.result = { status: 'skipped', target_system: 'M01_KERNEL', changed: {}, received_at: request.decided_at, reason: '管理员拒绝办理' };
+      this._audit({ kind: 'person.change.rejected', request_id, decided_by: approver_id });
+      return { ok: true, request: this._personChangeRequestView(request) };
+    }
+    const person = this.persons.get(request.person_id);
+    let result;
+    if (request.action === 'offboard' || request.action === 'reinstate') {
+      result = applyPersonLifecycleTransition(this, request.person_id, request.action, request.effective_at, String(approver_id), randomUUID());
+    } else {
+      result = this.applyM07Event({
+        event_id: `EVT_PCR_${randomUUID()}`,
+        tenant_id: request.tenant_id,
+        type: request.action === 'hire' ? 'person.hired' : 'person.transferred',
+        person_id: request.person_id,
+        position_id: request.position_id,
+        seq: Date.now(),
+        profile: { department_id: request.department_id, job_title: request.job_title }
+      });
+    }
+    if (result.ok === false) {
+      request.status = 'FAILED';
+      request.result = { status: 'failed', target_system: 'M01_KERNEL', changed: {}, received_at: request.decided_at, reason: result.error };
+    } else {
+      request.status = result.status === 'scheduled' ? 'SCHEDULED' : 'COMPLETED';
+      if (person) person.profile = { ...(person.profile || {}), department_id: request.department_id, job_title: request.job_title };
+      request.result = { status: result.status === 'pending_confirmation' ? 'pending_confirmation' : 'synced', target_system: 'M01_KERNEL', changed: { person: 1 }, received_at: request.decided_at, result };
+    }
+    this._audit({ kind: 'person.change.processed', request_id, status: request.status, decided_by: approver_id });
+    return { ok: request.status !== 'FAILED', status: request.status === 'FAILED' ? 409 : 200, request: this._personChangeRequestView(request) };
+  }
+
+  listPersonChangeRequests(tenant_id) {
+    return [...this.personChangeRequests.values()]
+      .filter((item) => item.tenant_id === String(tenant_id))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+      .map((item) => this._personChangeRequestView(item));
+  }
+
+  _personChangeRequestView(request) {
+    return {
+      request_id: request.request_id, tenant_id: request.tenant_id, requester_id: request.requester_id,
+      person_id: request.person_id, action: request.action, department_id: request.department_id,
+      position_id: request.position_id, job_title: request.job_title, effective_at: request.effective_at,
+      reason: request.reason, source: request.source, status: request.status, created_at: request.created_at,
+      decided_at: request.decided_at, decided_by: request.decided_by, comment: request.comment, result: request.result
+    };
+  }
+
+  decideApproval({ tenant_id, approval_id, approver_id, decision, comment }) {
+    const approval = this.approvals.get(approval_id);
+    if (!approval) return { ok: false, status: 404, error: 'unknown approval_id' };
+    if (approval.tenant_id !== tenant_id) return { ok: false, status: 403, error: 'approval tenant boundary violation' };
+    if (approval.status !== 'PENDING') return { ok: false, status: 409, error: `approval is already ${approval.status.toLowerCase()}` };
+    if (!approver_id) return { ok: false, status: 400, error: 'required: approver_id' };
+    if (approval.requester_id === approver_id) return { ok: false, status: 403, error: 'requester cannot approve own action' };
+    const normalized = String(decision || '').toUpperCase();
+    if (normalized !== 'APPROVE' && normalized !== 'REJECT') {
+      return { ok: false, status: 400, error: 'decision must be APPROVE or REJECT' };
+    }
+    approval.status = normalized === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+    approval.decided_at = new Date().toISOString();
+    approval.decided_by = approver_id;
+    approval.comment = String(comment || '').slice(0, 500) || null;
+    this._audit({ kind: 'approval.decided', trace_id: randomUUID(), ...this._approvalView(approval) });
+    return { ok: true, approval: this._approvalView(approval) };
+  }
+
+  listApprovals(tenant_id) {
+    return [...this.approvals.values()]
+      .filter((approval) => approval.tenant_id === tenant_id)
+      .map((approval) => this._approvalView(approval));
+  }
+
+  consumeApproval({ tenant_id, ticket, resource, action, object_id, parameters }) {
+    const approval = this.approvals.get(ticket);
+    if (!approval) return { ok: false, error: 'approval ticket not found' };
+    if (approval.tenant_id !== tenant_id) return { ok: false, error: 'approval ticket tenant boundary violation' };
+    if (approval.status === 'CONSUMED') return { ok: false, error: 'approval ticket already consumed' };
+    if (approval.status !== 'APPROVED') return { ok: false, error: `approval ticket is ${approval.status.toLowerCase()}` };
+    if (approval.resource !== resource || approval.action !== action || approval.object_id !== object_id) {
+      return { ok: false, error: 'approval ticket binding mismatch' };
+    }
+    if (approval.parameters_hash !== parametersHash(parameters)) {
+      return { ok: false, error: 'approval ticket parameter binding mismatch' };
+    }
+    approval.status = 'CONSUMED';
+    approval.consumed_at = new Date().toISOString();
+    this._audit({ kind: 'approval.consumed', trace_id: randomUUID(), ...this._approvalView(approval) });
+    return { ok: true };
   }
 
   _qa(options) {
@@ -184,52 +563,67 @@ export class M01Kernel {
     const low = raw.toLowerCase();
     const trace_id = randomUUID();
     const ex = this._extract(raw);
+    const personName = (personId) => this.persons.get(personId)?.profile?.display_name || personId;
+    const humanize = (value) => String(value || '')
+      .replace(/\bP_[A-Z0-9_]+\b/g, (personId) => personName(personId))
+      .replace(/\bA_[A-Z0-9_]+\b/g, '智能助手')
+      .replace(/\bAgent\b/gi, '智能助手')
+      .replace(/\bscope\b/gi, '工作范围')
+      .replace(/\bPOS_STAFF\b/g, '普通员工')
+      .replace(/\bPOS_MANAGER\b/g, '经理')
+      .replace(/\bPOS_OWNER\b/g, '管理员兼总经理')
+      .replace(/\bhigh-risk command needs maker-checker approval ticket; master agent cannot bypass \(fail closed\)/gi, '这类高风险操作需要管理员审批')
+      .replace(/\bapproval ticket\b/gi, '审批记录')
+      .replace(/\bmaster agent\b/gi, '总控助手')
+      .replace(/\bunknown position_id\b/gi, '岗位信息不正确')
+      .replace(/\bowner person must be active in same tenant\b/gi, '负责人必须是本单位的在职人员');
     const reply = (content, quick_actions, extra = {}) => {
-      const out = { trace_id, role: 'assistant', content, ...(quick_actions && quick_actions.length ? { quick_actions: this._qa(quick_actions) } : {}), ...extra };
-      this._audit({ kind: 'master.say', trace_id, tenant_id, text: raw.slice(0, 200), reply: content.slice(0, 200) });
+      const plainContent = humanize(content);
+      const out = { trace_id, role: 'assistant', content: plainContent, ...(quick_actions && quick_actions.length ? { quick_actions: this._qa(quick_actions) } : {}), ...extra };
+      this._audit({ kind: 'master.say', trace_id, tenant_id, text: raw.slice(0, 200), reply: plainContent.slice(0, 200) });
       return out;
     };
-    const needRegister = () => reply('总控 Agent 还没注册，无法执行指令。要先注册吗（绑定负责人 P_OWNER）？', [
+    const needRegister = () => reply('总控助手还没有启用，暂时不能办理。要先启用吗？', [
       { label: '注册总控', prompt: '注册总控', primary: true }
     ]);
     const run = (command, params, okPhrase) => {
       if (!this.master) return needRegister();
       const d = this.dispatchCommand({ tenant_id, command, params });
-      if (d.ok === false) return reply(`✗ 指令格式有问题：${d.error}`, []);
-      if (d.decision === 'EXECUTED') return reply(`✓ ${okPhrase || '已完成'}：${command}${d.trace_id ? `（trace ${d.trace_id.slice(0, 8)}）` : ''}`, d.output != null ? undefined : [], { decision: d.decision, command, trace_id: d.trace_id, output: d.output });
-      if (d.decision === 'REQUIRE_APPROVAL') return reply(`△ 这个操作我不能直接执行：${d.reason}。你可以先查看当前状态，或者保持等待审批票据。`, [
+      if (d.ok === false) return reply(`这次办理没有成功：${d.error}`, []);
+      if (d.decision === 'EXECUTED') return reply(`已办好：${okPhrase || '操作已完成'}。办理结果：已完成。`, d.output != null ? undefined : [], { decision: d.decision, command, trace_id: d.trace_id, output: d.output });
+      if (d.decision === 'REQUIRE_APPROVAL') return reply('这项操作需要管理员审批。审批状态：等待审批。办理结果：还没有办理。', [
         { label: '查看系统状态', prompt: '看看系统状态', primary: true },
-        { label: '查他的能力', prompt: `查一下 ${params.person_id || params.principal_id || params.agent_id || 'P_1001'} 的能力` }
+        { label: '先不办理', prompt: '取消' }
       ], { decision: d.decision, command, trace_id: d.trace_id });
-      return reply(`✗ 无法执行：${d.reason}`, [{ label: '查看系统状态', prompt: '看看系统状态', primary: true }], { decision: d.decision, command, trace_id: d.trace_id });
+      return reply(`这次办理没有完成。办理结果：未办理。${d.reason ? `原因：${d.reason}。` : ''}`, [{ label: '查看系统状态', prompt: '看看系统状态', primary: true }], { decision: d.decision, command, trace_id: d.trace_id });
     };
 
     if (/^注册总控|注册.{0,4}总控/.test(raw)) {
       const r = this.registerMaster({ tenant_id, owner_person_id: ex.person || 'P_OWNER' });
       if (r.ok === false) return reply(`注册失败：${r.error}`, []);
-      return reply(`✓ 总控 Agent 已注册并在线，负责人 ${r.master.owner_person_id}。用大白话告诉我要做什么就行。`, [
-        { label: '来个人入职', prompt: `让 ${ex.person || 'P_1001'} 入职，岗位 POS_STAFF`, primary: true },
+      return reply('总控助手已启用并在线。接下来直接用大白话告诉我需要办理什么就行。', [
+        { label: '办理入职', prompt: `让 ${ex.person || 'P_1001'} 入职，岗位 POS_STAFF`, primary: true },
         { label: '看看状态', prompt: '看看系统状态' },
-        { label: '查能力', prompt: `查一下 ${ex.person || 'P_1001'} 的能力` }
-      ]);
+        { label: '查看权限', prompt: `查一下 ${ex.person || 'P_1001'} 的能力` }
+      ], { decision: 'EXECUTED', command: 'master.register', registration: r });
     }
     if (/^(你好|hi|hello|在吗|帮帮忙|帮助|help|能做什么|你会什么|你能干什么)/.test(low)) {
-      return reply('你好，负责人。我是总控 Agent，替你统管这个系统：人员入转调离、子 Agent 注册撤销、能力查询、判权、撤权和状态审计都能办。直接说事就行。', [
-        { label: '让 P_1001 入职', prompt: '让 P_1001 入职，岗位 POS_STAFF', primary: true },
+      return reply('你好，我是总控助手，可以帮你办理人员入职、调岗、离职，也可以查看权限和系统状态。直接说要办什么就行。', [
+        { label: '办理入职', prompt: '让 P_1001 入职，岗位 POS_STAFF', primary: true },
         { label: '系统什么状态', prompt: '看看系统状态' },
-        { label: 'P_1001 有什么权限', prompt: '查一下 P_1001 的能力' }
+        { label: '查看权限', prompt: '查一下 P_1001 的能力' }
       ]);
     }
     if (/取消|算了|不用了/.test(raw)) return reply('好的，本次操作已取消。');
 
     if (/离职|辞退|开除/.test(raw)) {
       const p = ex.person;
-      if (!p) return reply('要给谁办离职？', [
-        { label: 'P_1001', prompt: '让 P_1001 离职', primary: true },
+      if (!p) return reply('请告诉我哪位员工要办理离职。', [
+        { label: '先不办理', prompt: '取消', primary: true },
         { label: '算了', prompt: '取消' }
       ]);
-      if (/确认/.test(raw)) return run('person.offboard', { person_id: p }, `已按流程尝试为 ${p} 办离职（高风险，等待审批）`);
-      return reply(`${p} 的离职属于高风险操作（会撤销其本人和名下全部 Agent 的权限）。确认要继续吗？继续也会因无审批票据被安全拦截。`, [
+      if (/确认/.test(raw)) return run('person.offboard', { person_id: p }, `已提交${personName(p)}的离职办理`);
+      return reply(`${personName(p)}的离职需要管理员审批，审批通过后才会办理，并会收回本人及名下智能助手的权限。确认继续吗？`, [
         { label: '确认执行', prompt: `确认让 ${p} 离职`, primary: true },
         { label: '先看他的权限', prompt: `查一下 ${p} 的能力` },
         { label: '取消', prompt: '取消' }
@@ -244,13 +638,11 @@ export class M01Kernel {
         ]);
       }
       const p = ex.person;
-      if (!p) return reply('要撤销谁的身份/Agent？说人员 ID（P_ 开头）或 Agent ID（A_ 开头）。', [
-        { label: '撤 P_1001', prompt: '撤销 P_1001', primary: true },
-        { label: '撤主 Agent', prompt: '撤销 Agent A_MAIN_1001' },
-        { label: '取消', prompt: '取消' }
+      if (!p) return reply('请告诉我哪位员工要停用，或者哪位智能助手要撤销。', [
+        { label: '取消', prompt: '取消', primary: true }
       ]);
       if (/确认/.test(raw)) return run('principal.revoke', { principal_id: p }, `已按流程尝试撤权 ${p}`);
-      return reply(`撤销 ${p} 的全部权限是高风险操作。确认继续？`, [
+      return reply(`撤销${personName(p)}的全部权限是高风险操作，需要管理员审批。确认继续？`, [
         { label: '确认执行', prompt: `确认撤销 ${p}`, primary: true },
         { label: '先看权限', prompt: `查一下 ${p} 的能力` },
         { label: '取消', prompt: '取消' }
@@ -259,7 +651,7 @@ export class M01Kernel {
     if (/入职|新员工|招聘|招了|聘用|录用/.test(raw)) {
       const p = ex.person || 'P_1001';
       const pos = ex.position;
-      if (!pos) return reply(`好的，让 ${p} 入职。安排到哪个岗位？`, [
+      if (!pos) return reply(`好的，${personName(p)}要入职。安排到哪个岗位？`, [
         { label: '普通员工', prompt: `让 ${p} 入职，岗位 POS_STAFF`, primary: true },
         { label: '经理', prompt: `让 ${p} 入职，岗位 POS_MANAGER` },
         { label: '算了', prompt: '取消' }
@@ -269,7 +661,7 @@ export class M01Kernel {
     if (/调岗|转岗|调到|换成|晋升/.test(raw)) {
       const p = ex.person || 'P_1001';
       const pos = ex.position;
-      if (!pos) return reply(`${p} 调到哪个岗位？`, [
+      if (!pos) return reply(`${personName(p)}要调到哪个岗位？`, [
         { label: '经理', prompt: `把 ${p} 调到经理岗`, primary: true },
         { label: '普通员工', prompt: `把 ${p} 调到员工岗` },
         { label: '取消', prompt: '取消' }
@@ -280,9 +672,9 @@ export class M01Kernel {
       const a = ex.agent || 'A_CHILD_1001';
       const owner = ex.person || 'P_1001';
       const sc = ex.scope;
-      if (!sc) return reply(`好，给 ${owner} 注册子 Agent ${a}。授什么权限范围（scope）？`, [
-        { label: 'task:execute', prompt: `注册子 Agent ${a}，归属 ${owner}，scope task:execute`, primary: true },
-        { label: 'report:read', prompt: `注册子 Agent ${a}，归属 ${owner}，scope report:read` },
+      if (!sc) return reply(`好的，要给${personName(owner)}添加智能助手。它主要负责哪类工作？`, [
+        { label: '办理日常任务', prompt: `注册子 Agent ${a}，归属 ${owner}，scope task:execute`, primary: true },
+        { label: '查看报表', prompt: `注册子 Agent ${a}，归属 ${owner}，scope report:read` },
         { label: '取消', prompt: '取消' }
       ]);
       return run('agent.register', { agent_id: a, owner_person_id: owner, scopes: [sc] }, `子 Agent ${a} 已注册`);
@@ -294,9 +686,9 @@ export class M01Kernel {
     if (/判权|能不能|允不允许|允许吗|可以吗/.test(raw)) {
       const p = ex.person || ex.agent || 'P_1001';
       const sc = ex.scope;
-      if (!sc) return reply(`要判断 ${p} 对哪个动作的权限？格式 资源:动作。`, [
-        { label: 'task:execute', prompt: `判断 ${p} 能不能 task:execute`, primary: true },
-        { label: 'data:export', prompt: `判断 ${p} 能不能 data:export` },
+      if (!sc) return reply(`要判断${personName(p)}能不能办理哪项工作？`, [
+        { label: '办理日常任务', prompt: `判断 ${p} 能不能 task:execute`, primary: true },
+        { label: '导出数据', prompt: `判断 ${p} 能不能 data:export` },
         { label: '取消', prompt: '取消' }
       ]);
       const [resource, action] = sc.split(':');
@@ -305,7 +697,7 @@ export class M01Kernel {
     if (/状态|概况|怎么样|多少人|多少个|运行/.test(raw)) return run('system.status', {}, '系统状态如下');
     if (/审计|日志|记录|操作记录/.test(raw)) return run('audit.tail', { limit: 10 }, '最近审计记录如下');
 
-    return reply('这个我还不会办。我目前能做：人员入转调离、子 Agent 注册撤销、能力查询、判权、撤权、状态与审计。想办哪件？', [
+    return reply('这件事我暂时不会办。我可以帮你办理人员入职、调岗、离职，添加或撤销智能助手，查看权限和系统状态。想办哪件？', [
       { label: '来个人入职', prompt: '让 P_1001 入职，岗位 POS_STAFF', primary: true },
       { label: '看看系统状态', prompt: '看看系统状态' },
       { label: '查权限', prompt: '查一下 P_1001 的能力' }
@@ -328,6 +720,37 @@ export class M01Kernel {
     return record.trace_id;
   }
 
+  _bumpAuthorizationVersion(principal_id, reason, trace_id = randomUUID()) {
+    const principal = this.persons.get(principal_id) || this.agents.get(principal_id);
+    if (!principal) return null;
+    principal.authz_version = (principal.authz_version || 1) + 1;
+    this._audit({ kind: 'authorization.version_changed', trace_id, principal_id, authz_version: principal.authz_version, reason });
+    return principal.authz_version;
+  }
+
+  _revokeAgentCascade(agent_id, reason, trace_id = randomUUID()) {
+    const affected = [];
+    const pending = [agent_id];
+    const visited = new Set();
+    while (pending.length) {
+      const current_id = pending.shift();
+      if (visited.has(current_id)) continue;
+      visited.add(current_id);
+      const agent = this.agents.get(current_id);
+      if (!agent) continue;
+      if (agent.status === 'active') {
+        agent.status = 'revoked';
+        this._bumpAuthorizationVersion(agent.agent_id, reason, trace_id);
+        affected.push(agent.agent_id);
+        this._audit({ kind: 'm13.agent.revoked', agent_id: agent.agent_id, reason, trace_id });
+      }
+      for (const child of this.agents.values()) {
+        if (child.parent_agent_id === current_id) pending.push(child.agent_id);
+      }
+    }
+    return affected;
+  }
+
   applyM07Event(event) {
     const event_id = event.event_id;
     if (!event_id || !event.tenant_id || !event.type || !event.person_id) {
@@ -344,11 +767,14 @@ export class M01Kernel {
 
     let person = this.persons.get(event.person_id);
     if (!person) {
-      person = { person_id: event.person_id, tenant_id: event.tenant_id, status: 'pending', position_id: null, seq: 0 };
+      person = { person_id: event.person_id, tenant_id: event.tenant_id, status: 'pending', position_id: null, seq: 0, authz_version: 1 };
       this.persons.set(event.person_id, person);
     }
     if (event.tenant_id !== person.tenant_id) {
       return { ok: false, error: 'tenant mismatch for existing person', status: 403 };
+    }
+    if (event.profile && typeof event.profile === 'object' && !Array.isArray(event.profile)) {
+      person.profile = { ...(person.profile || {}), ...event.profile };
     }
     const hasSeq = event.seq !== undefined && event.seq !== null;
     const seq = Number(event.seq ?? 0);
@@ -375,6 +801,7 @@ export class M01Kernel {
       }
       person.position_id = event.position_id;
       person.seq = seq || person.seq + 1;
+      this._bumpAuthorizationVersion(person.person_id, 'person.transferred');
       this._audit({ kind: 'm07.person.transferred', event_id, person_id: person.person_id, position_id: event.position_id });
       return { ok: true, idempotent: false, applied: true, person: this._personView(person) };
     }
@@ -382,14 +809,16 @@ export class M01Kernel {
     if (event.type === 'person.offboarded') {
       person.status = 'offboarded';
       person.position_id = null;
+      person.profile = { ...(person.profile || {}), source_status: 'inactive' };
       person.seq = seq || person.seq + 1;
       this.revocations.set(event.person_id, { reason: event.reason || 'offboarded', at: new Date().toISOString() });
+      const trace_id = randomUUID();
       for (const agent of this.agents.values()) {
         if (agent.owner_person_id === event.person_id && agent.status === 'active') {
-          agent.status = 'revoked';
-          this._audit({ kind: 'm13.agent.revoked', agent_id: agent.agent_id, reason: `owner offboarded: ${event.person_id}` });
+          this._revokeAgentCascade(agent.agent_id, `owner offboarded: ${event.person_id}`, trace_id);
         }
       }
+      this._bumpAuthorizationVersion(person.person_id, 'person.offboarded', trace_id);
       this._audit({ kind: 'm07.person.offboarded', event_id, person_id: event.person_id, agents_revoked: true });
       return { ok: true, idempotent: false, applied: true, person: this._personView(person) };
     }
@@ -405,10 +834,16 @@ export class M01Kernel {
     }
     if (this.events.has(event_id)) {
       this._audit({ kind: 'm13.event.duplicate', event_id, result: 'ignored' });
-      return { ok: true, idempotent: true, event_id, applied: false };
+      const existingAgent = this.agents.get(event.agent_id);
+      return {
+        ok: true,
+        idempotent: true,
+        event_id,
+        idempotency_key: event.idempotency_key || event_id,
+        applied: false,
+        ...(existingAgent ? { agent: this._agentView(existingAgent), clamped_scopes: [] } : {}),
+      };
     }
-    this.events.set(event_id, { source: 'm13', type: event.type, at: new Date().toISOString() });
-
     if (event.type === 'agent.registered') {
       const owner = this.persons.get(event.owner_person_id);
       if (!owner || owner.status !== 'active' || owner.tenant_id !== event.tenant_id) {
@@ -426,16 +861,18 @@ export class M01Kernel {
         scopes = requested.filter((s) => allowed.has(s));
         clamped = requested.filter((s) => !allowed.has(s));
       }
+      this.events.set(event_id, { source: 'm13', type: event.type, at: new Date().toISOString() });
       this.agents.set(event.agent_id, {
         agent_id: event.agent_id,
         tenant_id: event.tenant_id,
         owner_person_id: event.owner_person_id,
         parent_agent_id: event.parent_agent_id || null,
         scopes,
-        status: 'active'
+        status: 'active',
+        authz_version: 1
       });
       this._audit({ kind: 'm13.agent.registered', event_id, agent_id: event.agent_id, owner_person_id: event.owner_person_id, parent_agent_id: event.parent_agent_id || null, scopes, clamped_scopes: clamped });
-      return { ok: true, idempotent: false, applied: true, agent: this._agentView(this.agents.get(event.agent_id)), clamped_scopes: clamped };
+      return { ok: true, idempotent: false, applied: true, event_id, idempotency_key: event.idempotency_key || event_id, agent: this._agentView(this.agents.get(event.agent_id)), clamped_scopes: clamped };
     }
 
     if (event.type === 'agent.revoked') {
@@ -443,13 +880,10 @@ export class M01Kernel {
       if (!agent) {
         return { ok: false, error: 'unknown agent_id', status: 404 };
       }
-      agent.status = 'revoked';
-      for (const child of this.agents.values()) {
-        if (child.parent_agent_id === event.agent_id && child.status === 'active') {
-          child.status = 'revoked';
-        }
-      }
-      this._audit({ kind: 'm13.agent.revoked', event_id, agent_id: event.agent_id, cascaded: true });
+      this.events.set(event_id, { source: 'm13', type: event.type, at: new Date().toISOString() });
+      const trace_id = randomUUID();
+      const affected = this._revokeAgentCascade(event.agent_id, 'agent revoked', trace_id);
+      this._audit({ kind: 'm13.agent.revoked', event_id, agent_id: event.agent_id, cascaded: affected.length > 1, trace_id });
       return { ok: true, idempotent: false, applied: true, agent: this._agentView(agent) };
     }
   }
@@ -562,12 +996,12 @@ export class M01Kernel {
     if (person) {
       person.status = 'revoked';
       person.position_id = null;
+      this._bumpAuthorizationVersion(principal_id, 'principal revoked', trace_id);
       this.revocations.set(principal_id, { reason: reason || 'manual revocation', at: new Date().toISOString() });
       let agentsRevoked = 0;
       for (const agent of this.agents.values()) {
         if (agent.owner_person_id === principal_id && agent.status === 'active') {
-          agent.status = 'revoked';
-          agentsRevoked += 1;
+          agentsRevoked += this._revokeAgentCascade(agent.agent_id, 'owner revoked', trace_id).length;
         }
       }
       this._audit({ kind: 'kernel.revocation', trace_id, principal_id, reason, agents_revoked: agentsRevoked });
@@ -575,17 +1009,17 @@ export class M01Kernel {
     }
     const agent = this.agents.get(principal_id);
     if (agent) {
-      agent.status = 'revoked';
+      const agentsRevoked = this._revokeAgentCascade(principal_id, 'agent revoked', trace_id).length;
       this.revocations.set(principal_id, { reason: reason || 'manual revocation', at: new Date().toISOString() });
       this._audit({ kind: 'kernel.revocation', trace_id, principal_id, reason, agent: true });
-      return { trace_id, principal_id, revoked: true, agents_revoked: 0 };
+      return { trace_id, principal_id, revoked: true, agents_revoked: agentsRevoked };
     }
     return { ok: false, status: 404, error: 'unknown principal_id' };
   }
 
   status() {
     return {
-      master: this.master ? { agent_id: this.master.agent_id, tenant_id: this.master.tenant_id, owner_person_id: this.master.owner_person_id, status: this.agents.get(this.master.agent_id)?.status || this.master.status, commands: this.master.scopes } : null,
+      master: this.master ? { agent_id: this.master.agent_id, tenant_id: this.master.tenant_id, owner_person_id: this.master.owner_person_id, status: this.agents.get(this.master.agent_id)?.status || this.master.status, authz_version: this.master.authz_version, commands: this.master.scopes } : null,
       persons: [...this.persons.values()].map((p) => this._personView(p)),
       agents: [...this.agents.values()].map((a) => this._agentView(a)),
       events_received: this.events.size,
@@ -594,11 +1028,22 @@ export class M01Kernel {
     };
   }
 
+  authorizationStatus(principal_id) {
+    const principal = this.persons.get(principal_id) || this.agents.get(principal_id);
+    if (!principal) return { ok: false, status: 404, error: 'unknown principal_id' };
+    return {
+      principal_id,
+      tenant_id: principal.tenant_id,
+      authz_version: principal.authz_version,
+      revoked: principal.status !== 'active' || this.revocations.has(principal_id)
+    };
+  }
+
   _personView(p) {
-    return { person_id: p.person_id, tenant_id: p.tenant_id, status: p.status, position_id: p.position_id, seq: p.seq };
+    return { person_id: p.person_id, tenant_id: p.tenant_id, status: p.status, position_id: p.position_id, seq: p.seq, authz_version: p.authz_version, profile: p.profile || null };
   }
 
   _agentView(a) {
-    return { agent_id: a.agent_id, tenant_id: a.tenant_id, owner_person_id: a.owner_person_id, parent_agent_id: a.parent_agent_id, scopes: a.scopes, status: a.status };
+    return { agent_id: a.agent_id, tenant_id: a.tenant_id, owner_person_id: a.owner_person_id, parent_agent_id: a.parent_agent_id, scopes: a.scopes, status: a.status, authz_version: a.authz_version };
   }
 }
